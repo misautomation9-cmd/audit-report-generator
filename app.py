@@ -23,7 +23,7 @@ def generate_pdf_report(excel_file):
         bottomMargin=25
     )
     story = []
-    printable_width = landscape(A4)[0] - 40  # ~801 pt
+    printable_width = landscape(A4)[0] - 40  # ~801 pt space for landscape tables
 
     # Typography Styles
     title_style = ParagraphStyle('DocTitle', fontName='Helvetica-Bold', fontSize=16, textColor=colors.HexColor('#1E293B'), spaceAfter=2)
@@ -36,6 +36,9 @@ def generate_pdf_report(excel_file):
 
     def append_total_row(df):
         """Calculates and appends a TOTAL row at the bottom for numeric columns."""
+        if df is None or df.empty or len(df.columns) == 0:
+            return df
+
         df_total = df.copy()
         total_row = {}
         has_numeric = False
@@ -60,14 +63,20 @@ def generate_pdf_report(excel_file):
 
     def make_dynamic_table(df):
         """Builds an auto-fitted ReportLab table with bold TOTAL formatting."""
+        if df is None or df.empty:
+            return None
+
         df_clean = df.copy()
         df_clean.columns = [str(c).strip() for c in df_clean.columns]
         df_clean = df_clean.loc[:, ~df_clean.columns.str.contains('^Unnamed')]
         
+        if df_clean.empty or len(df_clean.columns) == 0:
+            return None
+
         df_clean = append_total_row(df_clean)
 
         num_cols = len(df_clean.columns)
-        if num_cols == 0:
+        if num_cols == 0 or df_clean.empty:
             return None
 
         col_width = printable_width / num_cols
@@ -76,7 +85,7 @@ def generate_pdf_report(excel_file):
         data = [[Paragraph(str(col), tbl_header_style) for col in df_clean.columns]]
         
         last_row_idx = len(df_clean) - 1
-        has_total = df_clean.iloc[-1][df_clean.columns[0]] == "TOTAL"
+        has_total = (df_clean.iloc[last_row_idx][df_clean.columns[0]] == "TOTAL") if len(df_clean) > 0 else False
 
         for r_idx, row in df_clean.iterrows():
             row_data = []
@@ -116,6 +125,9 @@ def generate_pdf_report(excel_file):
 
     def create_comparison_chart(comp_df, first_date, second_date, dept_name):
         """Generates dynamic side-by-side bar chart for numerical comparison."""
+        if comp_df is None or comp_df.empty:
+            return None
+
         cat_col = comp_df.columns[0]
         numeric_cols = [c for c in comp_df.columns if c not in [cat_col] and 'Variance' not in c]
 
@@ -123,14 +135,14 @@ def generate_pdf_report(excel_file):
             return None
 
         col1, col2 = numeric_cols[0], numeric_cols[1]
-        plot_df = comp_df.head(10).copy()  # Limit to top 10 items for visual clarity
+        plot_df = comp_df.head(10).copy()
 
         fig, ax = plt.subplots(figsize=(8.5, 2.4), dpi=150)
         x = range(len(plot_df))
         width = 0.35
 
-        ax.bar([i - width/2 for i in x], plot_df[col1], width, label=first_date, color='#3B82F6')
-        ax.bar([i + width/2 for i in x], plot_df[col2], width, label=second_date, color='#10B981')
+        ax.bar([i - width/2 for i in x], pd.to_numeric(plot_df[col1], errors='coerce').fillna(0), width, label=first_date, color='#3B82F6')
+        ax.bar([i + width/2 for i in x], pd.to_numeric(plot_df[col2], errors='coerce').fillna(0), width, label=second_date, color='#10B981')
 
         ax.set_title(f"{dept_name}: Comparison Between {first_date} and {second_date}", fontsize=8, fontweight='bold', pad=8)
         ax.set_xticks(list(x))
@@ -169,7 +181,7 @@ def generate_pdf_report(excel_file):
     for dept_idx, (dept, tabs) in enumerate(dept_groups.items(), start=1):
         dept_elements = [Paragraph(f"{dept_idx}. Department / Module: {dept}", section_style)]
         
-        # If two date tabs exist, perform dynamic comparison
+        # Perform dynamic comparison when 2 date tabs exist for a department
         if len(tabs) >= 2:
             first_date, tab1 = tabs[0]
             second_date, tab2 = tabs[1]
@@ -177,44 +189,46 @@ def generate_pdf_report(excel_file):
             df1 = pd.read_excel(xls, tab1).dropna(how='all').dropna(how='all', axis=1)
             df2 = pd.read_excel(xls, tab2).dropna(how='all').dropna(how='all', axis=1)
 
-            df1.columns = [str(c).strip() for c in df1.columns]
-            df2.columns = [str(c).strip() for c in df2.columns]
+            if not df1.empty and not df2.empty:
+                df1.columns = [str(c).strip() for c in df1.columns]
+                df2.columns = [str(c).strip() for c in df2.columns]
 
-            # Primary Key Column (first string/text column)
-            cat_cols = [c for c in df1.columns if any(k in c.lower() for k in ['name', 'kpi', 'person', 'party', 'item', 'description', 'particulars'])]
-            key_col = cat_cols[0] if cat_cols else df1.columns[0]
+                # Identify key column for merging
+                cat_cols = [c for c in df1.columns if any(k in c.lower() for k in ['name', 'kpi', 'person', 'party', 'item', 'description', 'particulars'])]
+                key_col = cat_cols[0] if cat_cols else df1.columns[0]
 
-            # Merge data on key column
-            merged = pd.merge(df1, df2, on=key_col, suffixes=(f' ({first_date})', f' ({second_date})'))
-            
-            comp_data = {key_col: merged[key_col]}
-            numeric_cols = [c for c in df1.columns if c != key_col and pd.to_numeric(df1[c], errors='coerce').notna().sum() > 0]
+                # Outer join to capture data even if names/keys mismatch partially
+                merged = pd.merge(df1, df2, on=key_col, how='outer', suffixes=(f' ({first_date})', f' ({second_date})'))
+                
+                comp_data = {key_col: merged[key_col]}
+                numeric_cols = [c for c in df1.columns if c != key_col and pd.to_numeric(df1[c], errors='coerce').notna().sum() > 0]
 
-            for num_col in numeric_cols:
-                c1 = f"{num_col} ({first_date})"
-                c2 = f"{num_col} ({second_date})"
-                if c1 in merged.columns and c2 in merged.columns:
-                    val1 = pd.to_numeric(merged[c1], errors='coerce').fillna(0)
-                    val2 = pd.to_numeric(merged[c2], errors='coerce').fillna(0)
-                    comp_data[c1] = val1
-                    comp_data[c2] = val2
-                    comp_data[f"{num_col} Variance (+/-)"] = val2 - val1
+                for num_col in numeric_cols:
+                    c1 = f"{num_col} ({first_date})"
+                    c2 = f"{num_col} ({second_date})"
+                    if c1 in merged.columns and c2 in merged.columns:
+                        val1 = pd.to_numeric(merged[c1], errors='coerce').fillna(0)
+                        val2 = pd.to_numeric(merged[c2], errors='coerce').fillna(0)
+                        comp_data[c1] = val1
+                        comp_data[c2] = val2
+                        comp_data[f"{num_col} Variance (+/-)"] = val2 - val1
 
-            comp_df = pd.DataFrame(comp_data)
+                comp_df = pd.DataFrame(comp_data)
 
-            dept_elements.append(Paragraph(f"<b>Date-Wise Comparison: {first_date} vs {second_date}</b>", sub_section_style))
-            
-            comp_table = make_dynamic_table(comp_df)
-            if comp_table:
-                dept_elements.append(comp_table)
-                dept_elements.append(Spacer(1, 8))
+                if not comp_df.empty:
+                    dept_elements.append(Paragraph(f"<b>Date-Wise Comparison: {first_date} vs {second_date}</b>", sub_section_style))
+                    
+                    comp_table = make_dynamic_table(comp_df)
+                    if comp_table:
+                        dept_elements.append(comp_table)
+                        dept_elements.append(Spacer(1, 8))
 
-            chart_img = create_comparison_chart(comp_df, first_date, second_date, dept)
-            if chart_img:
-                dept_elements.append(chart_img)
-                dept_elements.append(Spacer(1, 10))
+                    chart_img = create_comparison_chart(comp_df, first_date, second_date, dept)
+                    if chart_img:
+                        dept_elements.append(chart_img)
+                        dept_elements.append(Spacer(1, 10))
 
-        # Output individual daily tab tables
+        # Output individual daily tab log tables
         for date_str, sheet_name in tabs:
             df_raw = pd.read_excel(xls, sheet_name).dropna(how='all').dropna(how='all', axis=1)
             if not df_raw.empty:
