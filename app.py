@@ -26,6 +26,13 @@ def parse_qty(v):
                 pass
     return total_qty
 
+def parse_invoice_count(val):
+    """Counts individual invoices in slash-separated string (e.g. '3651/3650' -> 2)."""
+    if pd.isna(val) or not str(val).strip() or str(val).strip() == '-':
+        return 0
+    parts = [p.strip() for p in str(val).strip().split('/') if p.strip()]
+    return len(parts)
+
 def parse_loading_time_to_hours(val):
     """Converts strings like '18 HRS', '1.5 HRS', '20 MIN.', '30 MIN.' to float hours."""
     if pd.isna(val) or not str(val).strip():
@@ -108,7 +115,13 @@ def generate_pdf_report(excel_file):
             qty_series = df_c[qnty_col].apply(parse_qty)
             total_qty = qty_series.sum()
 
-        # 2. Loading Time Duration Calculation
+        # 2. Total Invoices Generated Calculation (Counts slash-separated invoices)
+        inv_col = next((col_map[c] for c in col_map if any(k in c for k in ['invoice', 'inv no', 'inv. no'])), None)
+        total_invoices = 0
+        if inv_col:
+            total_invoices = df_c[inv_col].apply(parse_invoice_count).sum()
+
+        # 3. Loading Time Duration Calculation
         time_col = next((col_map[c] for c in col_map if any(k in c for k in ['loading time', 'time', 'duration', 'loading'])), None)
         total_loading_hours = 0.0
         avg_loading_hours = 0.0
@@ -117,14 +130,14 @@ def generate_pdf_report(excel_file):
             total_loading_hours = hours_series.sum()
             avg_loading_hours = hours_series.mean() if len(hours_series) > 0 else 0.0
 
-        # 3. Calculated Freight Amount
+        # 4. Calculated Freight Amount
         freight_col = next((col_map[c] for c in col_map if 'freight' in c), None)
         total_freight_amt = 0.0
         if freight_col:
             freight_vals = [parse_freight_amount(df_c[freight_col].iloc[i], qty_series.iloc[i]) for i in range(len(df_c))]
             total_freight_amt = sum(freight_vals)
 
-        # 4. Party Count & Pending Order Breakdown
+        # 5. Party Count & Pending Order Breakdown
         party_col = next((col_map[c] for c in col_map if any(k in c for k in ['party', 'customer', 'name'])), None)
         unique_parties = df_c[party_col].nunique() if party_col else len(df_c)
 
@@ -139,6 +152,7 @@ def generate_pdf_report(excel_file):
         return {
             "date": date_str,
             "total_qty": total_qty,
+            "total_invoices": total_invoices,
             "total_loading_hours": total_loading_hours,
             "avg_loading_hours": avg_loading_hours,
             "total_freight": total_freight_amt,
@@ -150,9 +164,9 @@ def generate_pdf_report(excel_file):
 
     def generate_chart_img(kpi1, kpi2, dept_name):
         fig, ax = plt.subplots(figsize=(8.0, 3.2), dpi=150)
-        metrics = ['Dispatched Qty\n(MT)', 'Loading Hours\n(Hrs)', 'Total Freight\n(₹)', 'Parties\nServiced', 'Yesterday\nPending']
-        d1_vals = [kpi1['total_qty'], kpi1['total_loading_hours'], kpi1['total_freight'], kpi1['party_count'], kpi1['yesterday_pending']]
-        d2_vals = [kpi2['total_qty'], kpi2['total_loading_hours'], kpi2['total_freight'], kpi2['party_count'], kpi2['yesterday_pending']]
+        metrics = ['Dispatched Qty\n(MT)', 'Total Invoices\nGenerated', 'Loading Hours\n(Hrs)', 'Total Freight\n(₹)', 'Parties\nServiced']
+        d1_vals = [kpi1['total_qty'], kpi1['total_invoices'], kpi1['total_loading_hours'], kpi1['total_freight'], kpi1['party_count']]
+        d2_vals = [kpi2['total_qty'], kpi2['total_invoices'], kpi2['total_loading_hours'], kpi2['total_freight'], kpi2['party_count']]
 
         x = range(len(metrics))
         width = 0.35
@@ -194,13 +208,18 @@ def generate_pdf_report(excel_file):
 
         total_row = {}
         has_numeric = False
-        ignore_keys = ['date', 's.no', 'phone', 'code', 'id', 'sr no', 'driver', 'invoice', 'eway', 'bill', 'no']
+        ignore_keys = ['date', 's.no', 'phone', 'code', 'id', 'sr no', 'driver', 'eway', 'bill', 'no']
 
         for col in df_total.columns:
             col_str = str(col).lower()
             
+            # Invoice count totaling
+            if any(k in col_str for k in ['invoice', 'inv no', 'inv. no']):
+                inv_sum = df_total[col].apply(parse_invoice_count).sum()
+                total_row[col] = f"{inv_sum} INVOICES"
+                has_numeric = True
             # Freight column totaling
-            if 'freight' in col_str:
+            elif 'freight' in col_str:
                 freight_sum = sum([parse_freight_amount(df_total[col].iloc[i], qty_series.iloc[i]) for i in range(len(df_total))])
                 total_row[col] = f"₹{freight_sum:,.2f}"
                 has_numeric = True
@@ -314,6 +333,7 @@ def generate_pdf_report(excel_file):
 
                 summary_data = [
                     [Paragraph("<b>Operational / Cost Metric</b>", tbl_header_style), Paragraph(f"<b>{first_date}</b>", tbl_header_style), Paragraph(f"<b>{second_date}</b>", tbl_header_style), Paragraph("<b>Operational Variance</b>", tbl_header_style)],
+                    [Paragraph("<b>Total Invoices Generated</b>", tbl_cell_style), Paragraph(f"{kpi1['total_invoices']} Invoices", tbl_cell_style), Paragraph(f"{kpi2['total_invoices']} Invoices", tbl_cell_style), Paragraph(f"<b>{kpi2['total_invoices'] - kpi1['total_invoices']:+} Invoices</b>", tbl_cell_style)],
                     [Paragraph("<b>Dispatched Quantity Tonnage</b>", tbl_cell_style), Paragraph(f"{kpi1['total_qty']:,.2f} MT", tbl_cell_style), Paragraph(f"{kpi2['total_qty']:,.2f} MT", tbl_cell_style), Paragraph(f"<b>{kpi2['total_qty'] - kpi1['total_qty']:+,.2f} MT</b>", tbl_cell_style)],
                     [Paragraph("<b>Calculated Total Freight Cost</b>", tbl_cell_style), Paragraph(f"₹{kpi1['total_freight']:,.2f}", tbl_cell_style), Paragraph(f"₹{kpi2['total_freight']:,.2f}", tbl_cell_style), Paragraph(f"<b>₹{kpi2['total_freight'] - kpi1['total_freight']:+,.2f}</b>", tbl_cell_style)],
                     [Paragraph("<b>Total Loading Duration Hours</b>", tbl_cell_style), Paragraph(f"{kpi1['total_loading_hours']:,.2f} Hrs", tbl_cell_style), Paragraph(f"{kpi2['total_loading_hours']:,.2f} Hrs", tbl_cell_style), Paragraph(f"<b>{kpi2['total_loading_hours'] - kpi1['total_loading_hours']:+,.2f} Hrs</b>", tbl_cell_style)],
