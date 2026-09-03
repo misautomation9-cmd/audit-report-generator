@@ -169,8 +169,8 @@ def generate_pdf_report(excel_file):
     
     sales_agg = df_dispatches.groupby(['Sales_Person', 'Sheet']).agg(
         Total_Dispatches=('Vehicle_No', 'count'),
-        Parties=('Party_Name', lambda x: ', '.join(x.unique())),
-        Adjustment_Notes=('Adjustment_Stock', lambda x: ', '.join([v for v in x.unique() if v != '-']) or 'None')
+        Parties=('Party_Name', lambda x: ', '.join([str(p) for p in x.dropna().unique() if str(p).strip()])),
+        Adjustment_Notes=('Adjustment_Stock', lambda x: ', '.join([str(v).strip() for v in x.unique() if str(v).strip() not in ['-', 'nan', 'None']]) or 'None')
     ).reset_index()
 
     sales_table_data = [[
