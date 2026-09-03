@@ -1,90 +1,139 @@
 import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
+import io
+
+# ReportLab Imports
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 
 st.set_page_config(page_title="Enterprise Reporting Portal", layout="wide")
 
-# --- Navigation Setup ---
-query_params = st.query_params
-default_report = query_params.get("report", "Godown Stock Report")
-
-report_map = {
-    "godown": "Godown Stock Report",
-    "dispatch": "Dispatch Comparison Report"
-}
-reverse_map = {v: k for k, v in report_map.items()}
-
-st.sidebar.title("Navigation")
-selected_report = st.sidebar.radio(
-    "Select Report:",
-    options=["Godown Stock Report", "Dispatch Comparison Report"],
-    index=0 if report_map.get(default_report, default_report) == "Godown Stock Report" else 1
-)
-
-st.query_params["report"] = reverse_map.get(selected_report, "godown")
-
-# --- Report 1: Godown Stock Report ---
-def render_godown_stock_report():
-    st.title("📦 Daily Godown Dispatch & Stock Movements Report")
+# --- Function to Generate Chart Image Stream ---
+def generate_stock_chart():
+    fig, ax = plt.subplots(figsize=(6, 2.5))
+    items = ['CHQ COIL', 'HR COIL', 'HR PLATE', 'HT COIL', 'PM PLATE']
+    opening = [567.19, 3576.35, 589.52, 614.05, 897.75]
+    closing = [538.63, 5557.50, 680.33, 950.60, 902.02]
     
-    # 1. File Uploader
-    uploaded_file = st.sidebar.file_uploader("Upload Godown Data (Excel/CSV)", type=["xlsx", "xls", "csv"], key="godown_file")
+    x = range(len(items))
+    ax.bar([i - 0.2 for i in x], opening, width=0.4, label='Opening (MT)', color='#4A90E2')
+    ax.bar([i + 0.2 for i in x], closing, width=0.4, label='Closing (MT)', color='#50E3C2')
+    ax.set_xticks(x)
+    ax.set_xticklabels(items, rotation=15, fontsize=8)
+    ax.set_ylabel("Metric Tons (MT)")
+    ax.legend(fontsize=8)
+    plt.tight_layout()
     
-    if uploaded_file is not None:
-        try:
-            # Load Data
-            df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            st.success("File uploaded successfully!")
-            
-            # Display Data / Summary
-            st.subheader("Data Overview")
-            st.dataframe(df.head())
-            
-            # 2. Download Generated PDF / Report Data
-            # Note: Replace 'df.to_csv()' with your custom PDF generation logic/bytes
-            csv_data = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Download Generated Report",
-                data=csv_data,
-                file_name="Godown_Stock_Report.csv",
-                mime="text/csv"
-            )
-        except Exception as e:
-            st.error(f"Error processing file: {e}")
-    else:
-        st.info("Please upload an Excel or CSV file in the sidebar to generate the report.")
+    img_buf = io.BytesIO()
+    plt.savefig(img_buf, format='png', dpi=150)
+    plt.close(fig)
+    img_buf.seek(0)
+    return img_buf
 
-# --- Report 2: Dispatch Comparison Report ---
-def render_dispatch_comparison_report():
-    st.title("📊 Date-Wise Audit & Operational Comparison Report")
-    
-    # 1. File Uploader (Allows multiple files for comparison)
-    uploaded_files = st.sidebar.file_uploader("Upload Dispatch Files to Compare", type=["xlsx", "xls", "csv"], accept_multiple_files=True, key="dispatch_files")
-    
-    if uploaded_files:
-        try:
-            st.success(f"{len(uploaded_files)} file(s) uploaded successfully!")
-            
-            # Display Metrics or Process Files
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Invoices Generated", "22", delta="+8")
-            col2.metric("Dispatched Tonnage", "196.41 MT", delta="-21.45 MT")
-            col3.metric("Freight Cost", "₹11,299.50", delta="+11,299.50")
-            
-            # 2. Download Button
-            # Pass your generated PDF bytes here
-            st.download_button(
-                label="📥 Download Comparison Report (PDF)",
-                data=b"Sample PDF Content",  # Replace with generated PDF binary bytes
-                file_name="Dispatch_Comparison_Report.pdf",
-                mime="application/pdf"
-            )
-        except Exception as e:
-            st.error(f"Error processing files: {e}")
-    else:
-        st.info("Please upload dispatch files in the sidebar to run the comparison.")
+# --- Function to Build the PDF ---
+def build_godown_pdf():
+    pdf_buffer = io.BytesIO()
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    story = []
+    styles = getSampleStyleSheet()
 
-# --- Page Router ---
-if selected_report == "Godown Stock Report":
-    render_godown_stock_report()
-elif selected_report == "Dispatch Comparison Report":
-    render_dispatch_comparison_report()
+    # Title & Header Styles
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Heading1'],
+        fontSize=14,
+        textColor=colors.HexColor('#1A2B4C'),
+        spaceAfter=4
+    )
+    subtitle_style = ParagraphStyle(
+        'DocSub',
+        parent=styles['Normal'],
+        fontSize=9,
+        textColor=colors.gray,
+        spaceAfter=12
+    )
+    section_style = ParagraphStyle(
+        'SecTitle',
+        parent=styles['Heading2'],
+        fontSize=11,
+        textColor=colors.HexColor('#2C3E50'),
+        spaceBefore=10,
+        spaceAfter=6
+    )
+
+    # 1. Header Block
+    story.append(Paragraph("DAILY GODOWN DISPATCH & STOCK MOVEMENTS REPORT", title_style))
+    story.append(Paragraph("Consolidated report covering dispatches and itemized stock balances.", subtitle_style))
+    story.append(Spacer(1, 8))
+
+    # 2. Table: Salesperson Dispatch Summary
+    story.append(Paragraph("1. Salesperson-Wise Dispatch Summary", section_style))
+    sales_data = [
+        ["Sales Person", "Sheet/Date", "Total Vehicles", "Parties Served", "Remarks"],
+        ["AKASH JI", "GD 19-09-2026", "2", "STEEL TMT HUB INDIA", "NO ADJUSTMENT"],
+        ["DEEPANKAR JI", "GD 20-09-2026", "5", "OFB TECH LTD, AGRASEN ISPAT", "Yesterday vehicle dispatch"],
+        ["SONU JI", "GD 20-09-2026", "7", "RELIABLE STEEL MONGERS", "Pending for dispatch"]
+    ]
+    
+    table_1 = Table(sales_data, colWidths=[90, 80, 70, 160, 120])
+    table_1.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1A2B4C')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 8),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#D1D5DB')),
+    ]))
+    story.append(table_1)
+    story.append(Spacer(1, 12))
+
+    # 3. Table: Item Stock Breakdown
+    story.append(Paragraph("2. Item-Wise Stock Breakdown (Opening vs Closing)", section_style))
+    stock_data = [
+        ["Particulars/Item", "Opening Stock (MT)", "Closing Stock (MT)", "Variance (MT)"],
+        ["CHQ COIL", "567.19", "538.63", "-28.56"],
+        ["HR COIL", "3,576.35", "5,557.50", "+1,981.15"],
+        ["HR PLATE", "589.52", "680.33", "+90.81"],
+        ["HT COIL", "614.05", "950.60", "+336.55"]
+    ]
+    table_2 = Table(stock_data, colWidths=[150, 120, 120, 130])
+    table_2.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2C3E50')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 8),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#D1D5DB')),
+    ]))
+    story.append(table_2)
+    story.append(Spacer(1, 12))
+
+    # 4. Embedded Visual Chart
+    story.append(Paragraph("3. Visual Analytics", section_style))
+    chart_stream = generate_stock_chart()
+    story.append(Image(chart_stream, width=520, height=210))
+
+    # Render document
+    doc.build(story)
+    pdf_buffer.seek(0)
+    return pdf_buffer.getvalue()
+
+# --- Streamlit UI App ---
+st.title("📦 Daily Godown Dispatch Portal")
+
+uploaded_file = st.file_uploader("Upload Daily Stock Data", type=["xlsx", "csv"])
+
+if uploaded_file or st.button("Generate Stock Report PDF"):
+    with st.spinner("Generating PDF Report..."):
+        pdf_bytes = build_godown_pdf()
+        
+    st.success("PDF Report successfully generated!")
+    
+    st.download_button(
+        label="📥 Download Daily Godown Stock Report (PDF)",
+        data=pdf_bytes,
+        file_name="Daily_Godown_Stock_Report.pdf",
+        mime="application/pdf"
+    )
