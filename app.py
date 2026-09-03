@@ -19,8 +19,8 @@ from reportlab.lib.styles import ParagraphStyle
 def parse_reporting_sections(df, sheet_name):
     """
     Parses the 2-section layout from daily godown reporting sheets:
-    - Section 1 (Cols 0-5): Salesperson, Party Name, Vehicle No, Stock Adjustments
-    - Section 2 (Cols 6-11): Opening/Closing Balances, Yesterday Production/Dispatch
+    - Section 1 (Cols 0-5): Salesperson, Party Name, Vehicle No, Yesterday Pending Dispatches (Dispatched Today)
+    - Section 2 (Cols 6-11): Opening/Closing Balances, Production Yesterday, Dispatch Stock
     """
     # --- SECTION 1: Dispatches & Salesperson Details ---
     disp_df = df.iloc[:, 0:6].copy()
@@ -81,7 +81,7 @@ def compute_kpi_summary(df, date_str):
         "opening_stock_mt": stock_summary['Opening_Stock_MT'],
         "closing_stock_mt": stock_summary['Closing_Stock_MT'],
         "yesterday_production_mt": stock_summary['Production_Yesterday_MT'],
-        "yesterday_dispatch_mt": stock_summary['Dispatch_Stock_MT'],
+        "dispatch_stock_mt": stock_summary['Dispatch_Stock_MT'],
         "sales_summary": sales_person_summary,
         "item_breakdown": item_df
     }
@@ -91,11 +91,10 @@ def compute_kpi_summary(df, date_str):
 # ==========================================
 
 def generate_stock_comparison_chart(df_item_stock):
-    """Generates a group bar chart comparing item-wise Opening vs. Closing stock."""
+    """Generates a grouped bar chart comparing item-wise Opening vs. Closing stock with data labels."""
     if df_item_stock.empty:
         return None
 
-    # Aggregate stock across all sheets
     agg_item = df_item_stock.groupby('Particulars').agg({
         'Opening_MT': 'sum',
         'Closing_MT': 'sum'
@@ -106,14 +105,47 @@ def generate_stock_comparison_chart(df_item_stock):
     x = np.arange(len(agg_item['Particulars']))
     width = 0.35
 
-    ax.bar(x - width/2, agg_item['Opening_MT'], width, label='Opening Stock (MT)', color='#3B82F6')
-    ax.bar(x + width/2, agg_item['Closing_MT'], width, label='Closing Stock (MT)', color='#10B981')
+    rects1 = ax.bar(x - width/2, agg_item['Opening_MT'], width, label='Opening Stock (MT)', color='#3B82F6')
+    rects2 = ax.bar(x + width/2, agg_item['Closing_MT'], width, label='Closing Stock (MT)', color='#10B981')
+
+    # Add Data Labels
+    ax.bar_label(rects1, padding=3, fmt='%.1f', fontsize=7, fontweight='bold')
+    ax.bar_label(rects2, padding=3, fmt='%.1f', fontsize=7, fontweight='bold')
 
     ax.set_ylabel('Metric Tons (MT)', fontsize=9, fontweight='bold', color='#1E293B')
-    ax.set_title('Item-Wise Stock Balance Comparison', fontsize=11, fontweight='bold', color='#0F172A', pad=10)
+    ax.set_title('Item-Wise Opening vs Closing Stock Balance', fontsize=11, fontweight='bold', color='#0F172A', pad=10)
     ax.set_xticks(x)
     ax.set_xticklabels(agg_item['Particulars'], rotation=45, ha='right', fontsize=8)
     ax.legend(frameon=True, facecolor='#F8FAFC', edgecolor='none')
+    ax.grid(axis='y', linestyle='--', alpha=0.5)
+
+    plt.tight_layout()
+    img_buf = io.BytesIO()
+    plt.savefig(img_buf, format='png', bbox_inches='tight')
+    plt.close(fig)
+    img_buf.seek(0)
+    return img_buf
+
+
+def generate_sales_parties_chart(df_dispatches):
+    """Generates a bar chart showing unique parties served by each salesperson with data labels."""
+    if df_dispatches.empty:
+        return None
+
+    sales_party_agg = df_dispatches.groupby('Sales_Person')['Party_Name'].nunique().reset_index()
+    sales_party_agg.columns = ['Sales_Person', 'Parties_Count']
+    sales_party_agg = sales_party_agg.sort_values(by='Parties_Count', ascending=False)
+
+    fig, ax = plt.subplots(figsize=(10, 3.8), dpi=150)
+    
+    rects = ax.bar(sales_party_agg['Sales_Person'], sales_party_agg['Parties_Count'], color='#6366F1', width=0.45)
+
+    # Add Data Labels
+    ax.bar_label(rects, padding=3, fontsize=8, fontweight='bold')
+
+    ax.set_ylabel('Number of Parties Served', fontsize=9, fontweight='bold', color='#1E293B')
+    ax.set_title('Salesperson-Wise Served Parties Count', fontsize=11, fontweight='bold', color='#0F172A', pad=10)
+    ax.set_xticklabels(sales_party_agg['Sales_Person'], rotation=30, ha='right', fontsize=8)
     ax.grid(axis='y', linestyle='--', alpha=0.5)
 
     plt.tight_layout()
@@ -147,7 +179,7 @@ def generate_pdf_report(excel_file):
 
     # Document Header
     story.append(Paragraph("DAILY GODOWN DISPATCH & STOCK MOVEMENTS REPORT", title_style))
-    story.append(Paragraph("Comprehensive multi-sheet analysis of dispatches, production, and item-wise stock balances.", subtitle_style))
+    story.append(Paragraph("Consolidated report covering dispatches, delayed yesterday vehicle dispatches, and stock balances.", subtitle_style))
 
     # Data Processing
     xls = pd.ExcelFile(excel_file)
@@ -165,7 +197,7 @@ def generate_pdf_report(excel_file):
     df_item_stock = pd.concat(all_items, ignore_index=True)
 
     # --- SECTION 1: Salesperson Dispatch Summary ---
-    story.append(Paragraph("1. Salesperson-Wise Dispatch & Stock Adjustment Summary", section_style))
+    story.append(Paragraph("1. Salesperson-Wise Dispatch & Yesterday Pending Vehicles Summary", section_style))
     
     sales_agg = df_dispatches.groupby(['Sales_Person', 'Sheet']).agg(
         Total_Dispatches=('Vehicle_No', 'count'),
@@ -178,7 +210,7 @@ def generate_pdf_report(excel_file):
         Paragraph("Sheet / Date", tbl_header_style),
         Paragraph("Total Vehicles", tbl_header_style),
         Paragraph("Parties Served", tbl_header_style),
-        Paragraph("Stock Adjustment Remarks", tbl_header_style)
+        Paragraph("Yesterday Pending Dispatches (Dispatched Today)", tbl_header_style)
     ]]
 
     for _, r in sales_agg.iterrows():
@@ -190,7 +222,7 @@ def generate_pdf_report(excel_file):
             Paragraph(r['Adjustment_Notes'], tbl_cell_style)
         ])
 
-    t_sales = Table(sales_table_data, colWidths=[120, 90, 80, 260, 210])
+    t_sales = Table(sales_table_data, colWidths=[120, 80, 70, 240, 250])
     t_sales.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
@@ -202,14 +234,14 @@ def generate_pdf_report(excel_file):
     story.append(Spacer(1, 10))
 
     # --- SECTION 2: Overall Stock Movement ---
-    story.append(Paragraph("2. Godown Overall Stock & Yesterday Movement (MT)", section_style))
+    story.append(Paragraph("2. Godown Stock Balances & Production Summary (MT)", section_style))
 
     stock_table_data = [[
         Paragraph("Sheet / Date", tbl_header_style),
         Paragraph("Opening Stock (MT)", tbl_header_style),
         Paragraph("Closing Stock (MT)", tbl_header_style),
         Paragraph("Yesterday Production (MT)", tbl_header_style),
-        Paragraph("Yesterday Dispatch (MT)", tbl_header_style)
+        Paragraph("Dispatch Stock (MT)", tbl_header_style)
     ]]
 
     for _, r in df_stock_summary.iterrows():
@@ -232,11 +264,19 @@ def generate_pdf_report(excel_file):
     story.append(t_stock)
     story.append(Spacer(1, 10))
 
-    # --- SECTION 3: Visual Analytics Chart ---
-    chart_buf = generate_stock_comparison_chart(df_item_stock)
-    if chart_buf:
-        story.append(Paragraph("3. Visual Analytics: Item Stock Variations", section_style))
-        story.append(Image(chart_buf, width=760, height=220))
+    # --- SECTION 3: Visual Analytics Charts ---
+    story.append(Paragraph("3. Visual Analytics", section_style))
+
+    sales_chart_buf = generate_sales_parties_chart(df_dispatches)
+    if sales_chart_buf:
+        story.append(Paragraph("A. Salesperson-Wise Parties Served", section_style))
+        story.append(Image(sales_chart_buf, width=760, height=200))
+        story.append(Spacer(1, 10))
+
+    stock_chart_buf = generate_stock_comparison_chart(df_item_stock)
+    if stock_chart_buf:
+        story.append(Paragraph("B. Item Stock Opening vs Closing Comparison", section_style))
+        story.append(Image(stock_chart_buf, width=760, height=210))
 
     doc.build(story)
     pdf_buffer.seek(0)
