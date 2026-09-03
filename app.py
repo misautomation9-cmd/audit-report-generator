@@ -5,25 +5,20 @@ import matplotlib.pyplot as plt
 import streamlit as st
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
-from reportlab.lib.units import inch
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, KeepTogether, PageBreak
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, PageBreak
 )
 from reportlab.lib.styles import ParagraphStyle
 
 def generate_pdf_report(excel_file):
     pdf_buffer = io.BytesIO()
-    
     doc = SimpleDocTemplate(
         pdf_buffer,
         pagesize=landscape(A4),
-        rightMargin=20,
-        leftMargin=20,
-        topMargin=25,
-        bottomMargin=25
+        rightMargin=20, leftMargin=20, topMargin=25, bottomMargin=25
     )
     story = []
-    printable_width = landscape(A4)[0] - 40  # ~801 pt space for landscape tables
+    printable_width = landscape(A4)[0] - 40  # ~801 pt printable width
 
     # Typography Styles
     title_style = ParagraphStyle('DocTitle', fontName='Helvetica-Bold', fontSize=16, textColor=colors.HexColor('#1E293B'), spaceAfter=2)
@@ -34,149 +29,130 @@ def generate_pdf_report(excel_file):
     tbl_cell_style = ParagraphStyle('TableCell', fontName='Helvetica', fontSize=6, leading=7.5, textColor=colors.HexColor('#334155'), alignment=0)
     tbl_total_style = ParagraphStyle('TableTotal', fontName='Helvetica-Bold', fontSize=6.5, leading=8, textColor=colors.HexColor('#0F172A'), alignment=0)
 
+    def compute_kpi_summary(df, date_str):
+        """Calculates specific key performance indicators for a single date tab."""
+        if df is None or df.empty:
+            return {}
+
+        df_c = df.copy()
+        df_c.columns = [str(c).strip() for c in df_c.columns]
+        col_map = {c.lower(): c for c in df_c.columns}
+        
+        # 1. Total Dispatched Quantity
+        qnty_col = next((col_map[c] for c in col_map if any(k in c for k in ['qnty', 'quantity', 'qty', 'weight', 'tonnage'])), None)
+        total_qty = pd.to_numeric(df_c[qnty_col], errors='coerce').sum() if qnty_col else 0.0
+
+        # 2. Loading Time Calculation
+        time_col = next((col_map[c] for c in col_map if any(k in c for k in ['time', 'duration', 'loading', 'hours'])), None)
+        avg_loading_time = pd.to_numeric(df_c[time_col], errors='coerce').mean() if time_col else 0.0
+
+        # 3. Party Count
+        party_col = next((col_map[c] for c in col_map if any(k in c for k in ['party', 'customer', 'name', 'client'])), None)
+        unique_parties = df_c[party_col].nunique() if party_col else len(df_c)
+
+        # 4. Pending Status Breakdown
+        status_col = next((col_map[c] for c in col_map if any(k in c for k in ['status', 'remark', 'billing', 'state'])), None)
+        yesterday_pending, material_pending = 0, 0
+
+        if status_col:
+            statuses = df_c[status_col].astype(str).str.lower()
+            yesterday_pending = statuses.str.contains('yesterday|pending|yp', na=False).sum()
+            material_pending = statuses.str.contains('material|unbilled|hold', na=False).sum()
+
+        return {
+            "date": date_str,
+            "total_qty": total_qty,
+            "avg_loading_time": avg_loading_time,
+            "party_count": unique_parties,
+            "yesterday_pending": yesterday_pending,
+            "material_pending": material_pending,
+            "total_dispatches": len(df_c)
+        }
+
     def append_total_row(df):
-        """Calculates and appends a TOTAL row at the bottom for numeric columns."""
-        if df is None or df.empty or len(df.columns) == 0:
+        """Appends a TOTAL row for numeric data while ignoring document IDs and phone numbers."""
+        if df is None or df.empty:
             return df
 
         df_total = df.copy()
         total_row = {}
         has_numeric = False
-
-        # Non-aggregatable identifiers to skip during summation
-        ignore_keywords = ['date', 's.no', 'phone', 'code', 'id', 'sr no', 'driver', 'invoice', 'eway', 'bill', 'no', 'number']
+        ignore_keys = ['date', 's.no', 'phone', 'code', 'id', 'sr no', 'driver', 'invoice', 'eway', 'bill', 'no', 'number']
 
         for col in df_total.columns:
             col_str = str(col).lower()
             numeric_series = pd.to_numeric(df_total[col], errors='coerce')
             
-            # Skip non-aggregatable numeric fields like IDs, phone numbers, or document numbers
-            if numeric_series.notna().sum() > 0 and not any(k in col_str for k in ignore_keywords):
-                total_sum = numeric_series.sum()
-                total_row[col] = total_sum
+            if numeric_series.notna().sum() > 0 and not any(k in col_str for k in ignore_keys):
+                total_row[col] = numeric_series.sum()
                 has_numeric = True
             else:
                 total_row[col] = ""
         
         if has_numeric:
-            first_col = df_total.columns[0]
-            total_row[first_col] = "TOTAL"
+            total_row[df_total.columns[0]] = "TOTAL"
             df_total = pd.concat([df_total, pd.DataFrame([total_row])], ignore_index=True)
         return df_total
 
     def make_dynamic_table(df):
-        """Builds an auto-fitted ReportLab table with bold TOTAL formatting."""
+        """Constructs auto-scaled landscape tables with bold TOTAL footers."""
         if df is None or df.empty:
             return None
 
-        df_clean = df.copy()
-        df_clean.columns = [str(c).strip() for c in df_clean.columns]
-        df_clean = df_clean.loc[:, ~df_clean.columns.str.contains('^Unnamed')]
-        
-        if df_clean.empty or len(df_clean.columns) == 0:
-            return None
-
-        df_clean = append_total_row(df_clean)
-
+        df_clean = append_total_row(df.dropna(how='all').dropna(how='all', axis=1))
         num_cols = len(df_clean.columns)
-        if num_cols == 0 or df_clean.empty:
+        if num_cols == 0:
             return None
 
         col_width = printable_width / num_cols
-        col_widths = [col_width] * num_cols
-
         data = [[Paragraph(str(col), tbl_header_style) for col in df_clean.columns]]
         
         last_row_idx = len(df_clean) - 1
-        has_total = (df_clean.iloc[last_row_idx][df_clean.columns[0]] == "TOTAL") if len(df_clean) > 0 else False
+        has_total = (df_clean.iloc[last_row_idx][df_clean.columns[0]] == "TOTAL")
 
         for r_idx, row in df_clean.iterrows():
             row_data = []
-            is_total_row = has_total and (r_idx == last_row_idx)
-            current_style = tbl_total_style if is_total_row else tbl_cell_style
-            
+            current_style = tbl_total_style if (has_total and r_idx == last_row_idx) else tbl_cell_style
             for cell in row:
                 if pd.isna(cell) or cell == "":
-                    cell_text = ""
+                    text = ""
                 elif isinstance(cell, (int, float)):
-                    cell_text = f"{cell:,.2f}".rstrip('0').rstrip('.') if isinstance(cell, float) else f"{cell:,}"
+                    text = f"{cell:,.2f}".rstrip('0').rstrip('.') if isinstance(cell, float) else f"{cell:,}"
                 else:
-                    cell_text = str(cell).strip()
-                row_data.append(Paragraph(cell_text, current_style))
+                    text = str(cell).strip()
+                row_data.append(Paragraph(text, current_style))
             data.append(row_data)
 
-        t = Table(data, colWidths=col_widths, repeatRows=1)
-        
+        t = Table(data, colWidths=[col_width] * num_cols, repeatRows=1)
         t_style = [
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ('TOPPADDING', (0, 0), (-1, -1), 3),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-            ('LEFTPADDING', (0, 0), (-1, -1), 2),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 2),
             ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#CBD5E1')),
             ('ROWBACKGROUNDS', (0, 1), (-1, -2 if has_total else -1), [colors.white, colors.HexColor('#F8FAFC')])
         ]
-        
         if has_total:
-            t_style.append(('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#E2E8F0')))
-            t_style.append(('LINEABOVE', (0, -1), (-1, -1), 1.2, colors.HexColor('#1E293B')))
-            
+            t_style.extend([
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#E2E8F0')),
+                ('LINEABOVE', (0, -1), (-1, -1), 1.2, colors.HexColor('#1E293B'))
+            ])
         t.setStyle(TableStyle(t_style))
         return t
 
-    def create_comparison_chart(comp_df, first_date, second_date, dept_name):
-        """Generates dynamic side-by-side bar chart for numerical comparison."""
-        if comp_df is None or comp_df.empty:
-            return None
-
-        cat_col = comp_df.columns[0]
-        numeric_cols = [c for c in comp_df.columns if c not in [cat_col] and 'Variance' not in c]
-
-        if len(numeric_cols) < 2:
-            return None
-
-        col1, col2 = numeric_cols[0], numeric_cols[1]
-        plot_df = comp_df.head(10).copy()
-
-        fig, ax = plt.subplots(figsize=(8.5, 2.4), dpi=150)
-        x = range(len(plot_df))
-        width = 0.35
-
-        ax.bar([i - width/2 for i in x], pd.to_numeric(plot_df[col1], errors='coerce').fillna(0), width, label=first_date, color='#3B82F6')
-        ax.bar([i + width/2 for i in x], pd.to_numeric(plot_df[col2], errors='coerce').fillna(0), width, label=second_date, color='#10B981')
-
-        ax.set_title(f"{dept_name}: Comparison Between {first_date} and {second_date}", fontsize=8, fontweight='bold', pad=8)
-        ax.set_xticks(list(x))
-        ax.set_xticklabels(plot_df[cat_col].astype(str).str[:15], rotation=15, ha='right', fontsize=6.5)
-        ax.tick_params(axis='y', labelsize=6.5)
-        ax.legend(fontsize=7)
-        ax.grid(axis='y', linestyle='--', alpha=0.5)
-        plt.tight_layout()
-
-        img_buf = io.BytesIO()
-        plt.savefig(img_buf, format='png', bbox_inches='tight')
-        plt.close(fig)
-        img_buf.seek(0)
-        return Image(img_buf, width=8.5*inch, height=2.4*inch)
-
     xls = pd.ExcelFile(excel_file)
-    
-    # Document Header
-    story.append(Paragraph("DYNAMIC DATE-WISE AUDIT & COMPARISON REPORT", title_style))
-    story.append(Paragraph("Multi-Tab Variance & Summarization Engine", subtitle_style))
+    story.append(Paragraph("DYNAMIC DATE-WISE AUDIT & OPERATIONAL COMPARISON REPORT", title_style))
+    story.append(Paragraph("Dispatch Volume, Loading Efficiency & Operational Pending Status Engine", subtitle_style))
 
-    # Parse sheet names (e.g., 'HR-01/09/2026' or 'HR-01-09-2026')
+    # Pattern recognition for grouping date tabs (e.g. DISPATCH-31-08-2026)
     dept_groups = {}
     pattern = r"^(.*?)[-\s](\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})$"
 
     for sheet in xls.sheet_names:
         match = re.match(pattern, sheet.strip())
         if match:
-            dept = match.group(1).strip()
-            date_str = match.group(2).strip()
-            dept_groups.setdefault(dept, []).append((date_str, sheet))
+            dept_groups.setdefault(match.group(1).strip(), []).append((match.group(2).strip(), sheet))
         else:
             dept_groups.setdefault(sheet.strip(), []).append(("Raw Data", sheet))
 
@@ -184,71 +160,52 @@ def generate_pdf_report(excel_file):
     for dept_idx, (dept, tabs) in enumerate(dept_groups.items(), start=1):
         dept_elements = [Paragraph(f"{dept_idx}. Department / Module: {dept}", section_style)]
         
-        # Perform dynamic comparison when 2 date tabs exist for a department
         if len(tabs) >= 2:
             first_date, tab1 = tabs[0]
             second_date, tab2 = tabs[1]
-
-            df1 = pd.read_excel(xls, tab1).dropna(how='all').dropna(how='all', axis=1)
-            df2 = pd.read_excel(xls, tab2).dropna(how='all').dropna(how='all', axis=1)
+            df1 = pd.read_excel(xls, tab1)
+            df2 = pd.read_excel(xls, tab2)
 
             if not df1.empty and not df2.empty:
-                df1.columns = [str(c).strip() for c in df1.columns]
-                df2.columns = [str(c).strip() for c in df2.columns]
+                kpi1 = compute_kpi_summary(df1, first_date)
+                kpi2 = compute_kpi_summary(df2, second_date)
 
-                # Identify key column for merging
-                cat_cols = [c for c in df1.columns if any(k in c.lower() for k in ['name', 'kpi', 'person', 'party', 'item', 'description', 'particulars'])]
-                key_col = cat_cols[0] if cat_cols else df1.columns[0]
+                qty_diff = kpi2['total_qty'] - kpi1['total_qty']
+                qty_status = f"HIGHER (+{qty_diff:,.2f} MT)" if qty_diff > 0 else (f"LOWER ({qty_diff:,.2f} MT)" if qty_diff < 0 else "NO CHANGE")
 
-                # Outer join to capture data even if names/keys mismatch partially
-                merged = pd.merge(df1, df2, on=key_col, how='outer', suffixes=(f' ({first_date})', f' ({second_date})'))
-                
-                comp_data = {key_col: merged[key_col]}
-                
-                # Exclude non-aggregatable identifier columns from automatic variance calculations
-                exclude_keys = ['date', 's.no', 'phone', 'code', 'id', 'sr no', 'driver', 'invoice', 'eway', 'bill', 'no', 'number']
-                numeric_cols = [
-                    c for c in df1.columns 
-                    if c != key_col 
-                    and pd.to_numeric(df1[c], errors='coerce').notna().sum() > 0
-                    and not any(k in c.lower() for k in exclude_keys)
+                summary_data = [
+                    [Paragraph("<b>Operational Metric</b>", tbl_header_style), Paragraph(f"<b>{first_date}</b>", tbl_header_style), Paragraph(f"<b>{second_date}</b>", tbl_header_style), Paragraph("<b>Operational Variance / Status</b>", tbl_header_style)],
+                    [Paragraph("<b>Dispatched Quantity Tonnage</b>", tbl_cell_style), Paragraph(f"{kpi1['total_qty']:,.2f} MT", tbl_cell_style), Paragraph(f"{kpi2['total_qty']:,.2f} MT", tbl_cell_style), Paragraph(f"<b>{qty_status}</b>", tbl_cell_style)],
+                    [Paragraph("<b>Number of Parties Serviced</b>", tbl_cell_style), Paragraph(f"{kpi1['party_count']}", tbl_cell_style), Paragraph(f"{kpi2['party_count']}", tbl_cell_style), Paragraph(f"{kpi2['party_count'] - kpi1['party_count']:+} Parties", tbl_cell_style)],
+                    [Paragraph("<b>Yesterday Pending Orders</b>", tbl_cell_style), Paragraph(f"{kpi1['yesterday_pending']}", tbl_cell_style), Paragraph(f"{kpi2['yesterday_pending']}", tbl_cell_style), Paragraph(f"{kpi2['yesterday_pending'] - kpi1['yesterday_pending']:+} Orders", tbl_cell_style)],
+                    [Paragraph("<b>Material / Billing Pending</b>", tbl_cell_style), Paragraph(f"{kpi1['material_pending']}", tbl_cell_style), Paragraph(f"{kpi2['material_pending']}", tbl_cell_style), Paragraph(f"{kpi2['material_pending'] - kpi1['material_pending']:+} Orders", tbl_cell_style)],
+                    [Paragraph("<b>Total Recorded Dispatches</b>", tbl_cell_style), Paragraph(f"{kpi1['total_dispatches']}", tbl_cell_style), Paragraph(f"{kpi2['total_dispatches']}", tbl_cell_style), Paragraph(f"{kpi2['total_dispatches'] - kpi1['total_dispatches']:+} Dispatches", tbl_cell_style)]
                 ]
 
-                for num_col in numeric_cols:
-                    c1 = f"{num_col} ({first_date})"
-                    c2 = f"{num_col} ({second_date})"
-                    if c1 in merged.columns and c2 in merged.columns:
-                        val1 = pd.to_numeric(merged[c1], errors='coerce').fillna(0)
-                        val2 = pd.to_numeric(merged[c2], errors='coerce').fillna(0)
-                        comp_data[c1] = val1
-                        comp_data[c2] = val2
-                        comp_data[f"{num_col} Variance (+/-)"] = val2 - val1
+                kpi_table = Table(summary_data, colWidths=[200, 150, 150, 250])
+                kpi_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+                    ('TOPPADDING', (0, 0), (-1, -1), 4),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')])
+                ]))
 
-                comp_df = pd.DataFrame(comp_data)
+                dept_elements.extend([
+                    Paragraph(f"<b>Operational Audit Comparison: {first_date} vs {second_date}</b>", sub_section_style),
+                    kpi_table,
+                    Spacer(1, 10)
+                ])
 
-                if not comp_df.empty:
-                    dept_elements.append(Paragraph(f"<b>Date-Wise Comparison: {first_date} vs {second_date}</b>", sub_section_style))
-                    
-                    comp_table = make_dynamic_table(comp_df)
-                    if comp_table:
-                        dept_elements.append(comp_table)
-                        dept_elements.append(Spacer(1, 8))
-
-                    chart_img = create_comparison_chart(comp_df, first_date, second_date, dept)
-                    if chart_img:
-                        dept_elements.append(chart_img)
-                        dept_elements.append(Spacer(1, 10))
-
-        # Output individual daily tab log tables
         for date_str, sheet_name in tabs:
-            df_raw = pd.read_excel(xls, sheet_name).dropna(how='all').dropna(how='all', axis=1)
-            if not df_raw.empty:
-                label = f"Data Log: {sheet_name}" if date_str == "Raw Data" else f"Tab Log: {date_str}"
-                dept_elements.append(Paragraph(f"<b>{label}</b>", sub_section_style))
-                raw_table = make_dynamic_table(df_raw)
-                if raw_table:
-                    dept_elements.append(raw_table)
-                    dept_elements.append(Spacer(1, 8))
+            df_raw = pd.read_excel(xls, sheet_name)
+            raw_table = make_dynamic_table(df_raw)
+            if raw_table:
+                dept_elements.extend([
+                    Paragraph(f"<b>Tab Log: {date_str if date_str != 'Raw Data' else sheet_name}</b>", sub_section_style),
+                    raw_table,
+                    Spacer(1, 8)
+                ])
 
         story.append(KeepTogether(dept_elements))
         if dept_idx < len(dept_groups):
@@ -258,18 +215,11 @@ def generate_pdf_report(excel_file):
     pdf_buffer.seek(0)
     return pdf_buffer
 
-# Streamlit Interface Setup
-st.title("Dynamic Date-Wise Audit & Variance Generator")
+st.title("Dynamic Operational Audit & Variance Generator")
 uploaded_file = st.file_uploader("Upload Multi-Tab Excel Workbook (.xlsx)", type=["xlsx"])
 
-if uploaded_file is not None:
-    if st.button("Generate Audit Comparison PDF"):
-        with st.spinner("Processing dynamic date comparisons, graphs, and totals..."):
-            pdf_data = generate_pdf_report(uploaded_file)
-            st.success("PDF generated successfully!")
-            st.download_button(
-                label="Download Comparison PDF Report",
-                data=pdf_data,
-                file_name="Dynamic_Audit_Date_Comparison.pdf",
-                mime="application/pdf"
-            )
+if uploaded_file is not None and st.button("Generate Operational Audit PDF"):
+    with st.spinner("Processing dispatched quantities, loading times, and pending material statuses..."):
+        pdf_data = generate_pdf_report(uploaded_file)
+        st.success("PDF generated successfully!")
+        st.download_button("Download Comparison PDF Report", data=pdf_data, file_name="Operational_Audit_Comparison.pdf", mime="application/pdf")
