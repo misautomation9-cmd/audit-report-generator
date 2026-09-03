@@ -19,8 +19,8 @@ from reportlab.lib.styles import ParagraphStyle
 def parse_reporting_sections(df, sheet_name):
     """
     Parses the 2-section layout from daily godown reporting sheets:
-    - Section 1 (Cols 0-5): Salesperson, Party Name, Vehicle No, Yesterday Pending Dispatches (Dispatched Today)
-    - Section 2 (Cols 6-11): Opening/Closing Balances, Production Yesterday, Dispatch Stock
+    - Section 1 (Cols 0-5): Salesperson, Party Name, Vehicle No, Yesterday Pending Dispatches
+    - Section 2 (Cols 6-11): Opening/Closing Balances, Item Breakdowns, Production Yesterday, Dispatch Stock
     """
     # --- SECTION 1: Dispatches & Salesperson Details ---
     disp_df = df.iloc[:, 0:6].copy()
@@ -100,7 +100,7 @@ def generate_stock_comparison_chart(df_item_stock):
         'Closing_MT': 'sum'
     }).reset_index()
 
-    fig, ax = plt.subplots(figsize=(10, 4), dpi=150)
+    fig, ax = plt.subplots(figsize=(10, 4.2), dpi=150)
     
     x = np.arange(len(agg_item['Particulars']))
     width = 0.35
@@ -108,14 +108,17 @@ def generate_stock_comparison_chart(df_item_stock):
     rects1 = ax.bar(x - width/2, agg_item['Opening_MT'], width, label='Opening Stock (MT)', color='#3B82F6')
     rects2 = ax.bar(x + width/2, agg_item['Closing_MT'], width, label='Closing Stock (MT)', color='#10B981')
 
-    # Add Data Labels
-    ax.bar_label(rects1, padding=3, fmt='%.1f', fontsize=7, fontweight='bold')
-    ax.bar_label(rects2, padding=3, fmt='%.1f', fontsize=7, fontweight='bold')
+    # Add Data Labels with top margin spacing
+    max_val = max(agg_item['Opening_MT'].max(), agg_item['Closing_MT'].max())
+    ax.set_ylim(0, max_val * 1.18)
+
+    ax.bar_label(rects1, padding=3, fmt='%.1f', fontsize=6.5, fontweight='bold', rotation=0)
+    ax.bar_label(rects2, padding=3, fmt='%.1f', fontsize=6.5, fontweight='bold', rotation=0)
 
     ax.set_ylabel('Metric Tons (MT)', fontsize=9, fontweight='bold', color='#1E293B')
     ax.set_title('Item-Wise Opening vs Closing Stock Balance', fontsize=11, fontweight='bold', color='#0F172A', pad=10)
     ax.set_xticks(x)
-    ax.set_xticklabels(agg_item['Particulars'], rotation=45, ha='right', fontsize=8)
+    ax.set_xticklabels(agg_item['Particulars'], rotation=35, ha='right', fontsize=8)
     ax.legend(frameon=True, facecolor='#F8FAFC', edgecolor='none')
     ax.grid(axis='y', linestyle='--', alpha=0.5)
 
@@ -138,14 +141,18 @@ def generate_sales_parties_chart(df_dispatches):
 
     fig, ax = plt.subplots(figsize=(10, 3.8), dpi=150)
     
-    rects = ax.bar(sales_party_agg['Sales_Person'], sales_party_agg['Parties_Count'], color='#6366F1', width=0.45)
+    rects = ax.bar(sales_party_agg['Sales_Person'], sales_party_agg['Parties_Count'], color='#6366F1', width=0.4)
+
+    # Set dynamic y limit for spacing
+    max_c = sales_party_agg['Parties_Count'].max() if not sales_party_agg.empty else 5
+    ax.set_ylim(0, max_c * 1.2)
 
     # Add Data Labels
     ax.bar_label(rects, padding=3, fontsize=8, fontweight='bold')
 
     ax.set_ylabel('Number of Parties Served', fontsize=9, fontweight='bold', color='#1E293B')
     ax.set_title('Salesperson-Wise Served Parties Count', fontsize=11, fontweight='bold', color='#0F172A', pad=10)
-    ax.set_xticklabels(sales_party_agg['Sales_Person'], rotation=30, ha='right', fontsize=8)
+    ax.set_xticklabels(sales_party_agg['Sales_Person'], rotation=25, ha='right', fontsize=8)
     ax.grid(axis='y', linestyle='--', alpha=0.5)
 
     plt.tight_layout()
@@ -179,7 +186,7 @@ def generate_pdf_report(excel_file):
 
     # Document Header
     story.append(Paragraph("DAILY GODOWN DISPATCH & STOCK MOVEMENTS REPORT", title_style))
-    story.append(Paragraph("Consolidated report covering dispatches, delayed yesterday vehicle dispatches, and stock balances.", subtitle_style))
+    story.append(Paragraph("Consolidated report covering dispatches, delayed yesterday vehicle dispatches, and itemized stock balances.", subtitle_style))
 
     # Data Processing
     xls = pd.ExcelFile(excel_file)
@@ -197,7 +204,7 @@ def generate_pdf_report(excel_file):
     df_item_stock = pd.concat(all_items, ignore_index=True)
 
     # --- SECTION 1: Salesperson Dispatch Summary ---
-    story.append(Paragraph("1. Salesperson-Wise Dispatch & Yesterday Pending Vehicles Summary", section_style))
+    story.append(Paragraph("1. Salesperson-Wise Dispatch Summary", section_style))
     
     sales_agg = df_dispatches.groupby(['Sales_Person', 'Sheet']).agg(
         Total_Dispatches=('Vehicle_No', 'count'),
@@ -210,7 +217,7 @@ def generate_pdf_report(excel_file):
         Paragraph("Sheet / Date", tbl_header_style),
         Paragraph("Total Vehicles", tbl_header_style),
         Paragraph("Parties Served", tbl_header_style),
-        Paragraph("Yesterday Pending Dispatches (Dispatched Today)", tbl_header_style)
+        Paragraph("Adjustment / Remarks", tbl_header_style)
     ]]
 
     for _, r in sales_agg.iterrows():
@@ -222,7 +229,7 @@ def generate_pdf_report(excel_file):
             Paragraph(r['Adjustment_Notes'], tbl_cell_style)
         ])
 
-    t_sales = Table(sales_table_data, colWidths=[120, 80, 70, 240, 250])
+    t_sales = Table(sales_table_data, colWidths=[120, 80, 70, 270, 220])
     t_sales.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
@@ -233,8 +240,52 @@ def generate_pdf_report(excel_file):
     story.append(t_sales)
     story.append(Spacer(1, 10))
 
-    # --- SECTION 2: Overall Stock Movement ---
-    story.append(Paragraph("2. Godown Stock Balances & Production Summary (MT)", section_style))
+    # --- SECTION 2: Dedicated Table for Yesterday Vehicles Dispatched Today ---
+    story.append(Paragraph("2. Delayed Yesterday Vehicles Dispatched Today", section_style))
+    
+    # Filter rows specifically containing yesterday dispatch notes
+    yesterday_mask = df_dispatches['Adjustment_Stock'].astype(str).str.contains('yesterday|vehicle|\d{2}\.\d{2}\.\d{4}', case=False, na=False)
+    df_yesterday_dispatches = df_dispatches[yesterday_mask].copy()
+
+    yest_table_data = [[
+        Paragraph("Sheet / Date", tbl_header_style),
+        Paragraph("SR No", tbl_header_style),
+        Paragraph("Vehicle No", tbl_header_style),
+        Paragraph("Party Name", tbl_header_style),
+        Paragraph("Sales Person", tbl_header_style),
+        Paragraph("Dispatch Remark", tbl_header_style)
+    ]]
+
+    if not df_yesterday_dispatches.empty:
+        for _, r in df_yesterday_dispatches.iterrows():
+            yest_table_data.append([
+                Paragraph(str(r['Sheet']), tbl_cell_center),
+                Paragraph(str(r['SR_No']), tbl_cell_center),
+                Paragraph(r['Vehicle_No'], tbl_cell_center),
+                Paragraph(r['Party_Name'], tbl_cell_style),
+                Paragraph(r['Sales_Person'], tbl_cell_style),
+                Paragraph(r['Adjustment_Stock'], tbl_cell_style)
+            ])
+    else:
+        yest_table_data.append([
+            Paragraph("No delayed yesterday dispatches recorded.", tbl_cell_style),
+            Paragraph("-", tbl_cell_center), Paragraph("-", tbl_cell_center),
+            Paragraph("-", tbl_cell_style), Paragraph("-", tbl_cell_style), Paragraph("-", tbl_cell_style)
+        ])
+
+    t_yest = Table(yest_table_data, colWidths=[80, 50, 90, 250, 110, 180])
+    t_yest.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#991B1B')),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')
+    ]))
+    story.append(t_yest)
+    story.append(Spacer(1, 10))
+
+    # --- SECTION 3: Godown Overall Stock & Production Summary ---
+    story.append(Paragraph("3. Godown Overall Stock & Production Summary (MT)", section_style))
 
     stock_table_data = [[
         Paragraph("Sheet / Date", tbl_header_style),
@@ -264,19 +315,54 @@ def generate_pdf_report(excel_file):
     story.append(t_stock)
     story.append(Spacer(1, 10))
 
-    # --- SECTION 3: Visual Analytics Charts ---
-    story.append(Paragraph("3. Visual Analytics", section_style))
+    # --- SECTION 4: Itemized Stock Breakdown Table ---
+    story.append(Paragraph("4. Item-Wise Stock Breakdown (Opening vs Closing)", section_style))
+
+    item_stock_agg = df_item_stock.groupby('Particulars').agg({
+        'Opening_MT': 'sum',
+        'Closing_MT': 'sum',
+        'Variance_MT': 'sum'
+    }).reset_index()
+
+    item_table_data = [[
+        Paragraph("Particulars / Item", tbl_header_style),
+        Paragraph("Opening Stock (MT)", tbl_header_style),
+        Paragraph("Closing Stock (MT)", tbl_header_style),
+        Paragraph("Variance (MT)", tbl_header_style)
+    ]]
+
+    for _, r in item_stock_agg.iterrows():
+        item_table_data.append([
+            Paragraph(r['Particulars'], tbl_cell_style),
+            Paragraph(f"{r['Opening_MT']:,.2f}", tbl_cell_center),
+            Paragraph(f"{r['Closing_MT']:,.2f}", tbl_cell_center),
+            Paragraph(f"{r['Variance_MT']:,.2f}", tbl_cell_center)
+        ])
+
+    t_item = Table(item_table_data, colWidths=[220, 180, 180, 180])
+    t_item.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#374151')),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')
+    ]))
+    story.append(t_item)
+    story.append(Spacer(1, 10))
+
+    # --- SECTION 5: Visual Analytics Charts ---
+    story.append(Paragraph("5. Visual Analytics", section_style))
 
     sales_chart_buf = generate_sales_parties_chart(df_dispatches)
     if sales_chart_buf:
         story.append(Paragraph("A. Salesperson-Wise Parties Served", section_style))
-        story.append(Image(sales_chart_buf, width=760, height=200))
+        story.append(Image(sales_chart_buf, width=760, height=195))
         story.append(Spacer(1, 10))
 
     stock_chart_buf = generate_stock_comparison_chart(df_item_stock)
     if stock_chart_buf:
         story.append(Paragraph("B. Item Stock Opening vs Closing Comparison", section_style))
-        story.append(Image(stock_chart_buf, width=760, height=210))
+        story.append(Image(stock_chart_buf, width=760, height=205))
 
     doc.build(story)
     pdf_buffer.seek(0)
