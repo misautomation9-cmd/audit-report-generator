@@ -43,12 +43,15 @@ def generate_pdf_report(excel_file):
         total_row = {}
         has_numeric = False
 
+        # Non-aggregatable identifiers to skip during summation
+        ignore_keywords = ['date', 's.no', 'phone', 'code', 'id', 'sr no', 'driver', 'invoice', 'eway', 'bill', 'no', 'number']
+
         for col in df_total.columns:
             col_str = str(col).lower()
             numeric_series = pd.to_numeric(df_total[col], errors='coerce')
             
-            # Skip non-aggregatable numeric fields like IDs or codes
-            if numeric_series.notna().sum() > 0 and not any(k in col_str for k in ['date', 's.no', 'phone', 'code', 'id', 'sr no']):
+            # Skip non-aggregatable numeric fields like IDs, phone numbers, or document numbers
+            if numeric_series.notna().sum() > 0 and not any(k in col_str for k in ignore_keywords):
                 total_sum = numeric_series.sum()
                 total_row[col] = total_sum
                 has_numeric = True
@@ -201,7 +204,15 @@ def generate_pdf_report(excel_file):
                 merged = pd.merge(df1, df2, on=key_col, how='outer', suffixes=(f' ({first_date})', f' ({second_date})'))
                 
                 comp_data = {key_col: merged[key_col]}
-                numeric_cols = [c for c in df1.columns if c != key_col and pd.to_numeric(df1[c], errors='coerce').notna().sum() > 0]
+                
+                # Exclude non-aggregatable identifier columns from automatic variance calculations
+                exclude_keys = ['date', 's.no', 'phone', 'code', 'id', 'sr no', 'driver', 'invoice', 'eway', 'bill', 'no', 'number']
+                numeric_cols = [
+                    c for c in df1.columns 
+                    if c != key_col 
+                    and pd.to_numeric(df1[c], errors='coerce').notna().sum() > 0
+                    and not any(k in c.lower() for k in exclude_keys)
+                ]
 
                 for num_col in numeric_cols:
                     c1 = f"{num_col} ({first_date})"
