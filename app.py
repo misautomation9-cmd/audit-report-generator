@@ -19,8 +19,7 @@ from reportlab.lib.styles import ParagraphStyle
 def parse_reporting_sections(df, sheet_name):
     """
     Parses the 2-section layout from daily godown reporting sheets:
-    - Section 1 (Cols 0-5): Salesperson, Party Name, Vehicle No, Yesterday Pending Dispatches
-    - Section 2 (Cols 6-11): Opening/Closing Balances, Item Breakdowns, Production Yesterday, Dispatch Stock
+    Handles merged cells in 'Adjustment_Stock' via forward-fill.
     """
     # --- SECTION 1: Dispatches & Salesperson Details ---
     disp_df = df.iloc[:, 0:6].copy()
@@ -34,7 +33,10 @@ def parse_reporting_sections(df, sheet_name):
     disp_df = disp_df[~disp_df['Party_Name'].isin(['nan', 'None', '', 'Particulars'])]
     disp_df['Sales_Person'] = disp_df['Sales_Person'].astype(str).str.strip().replace({'nan': 'Unassigned', 'None': 'Unassigned'})
     disp_df['Vehicle_No'] = disp_df['Vehicle_No'].astype(str).str.strip()
-    disp_df['Adjustment_Stock'] = disp_df['Adjustment_Stock'].astype(str).str.strip().replace({'nan': '-', 'None': '-'})
+    
+    # Handle Merged Cells in Adjustment_Stock (Forward Fill)
+    disp_df['Adjustment_Stock'] = disp_df['Adjustment_Stock'].replace({'nan': np.nan, 'None': np.nan, '': np.nan})
+    disp_df['Adjustment_Stock'] = disp_df['Adjustment_Stock'].ffill().fillna('-')
     disp_df['Sheet'] = sheet_name
 
     # --- SECTION 2: Stock Balances & Production ---
@@ -243,7 +245,7 @@ def generate_pdf_report(excel_file):
     # --- SECTION 2: Dedicated Table for Yesterday Vehicles Dispatched Today ---
     story.append(Paragraph("2. Delayed Yesterday Vehicles Dispatched Today", section_style))
     
-    # Filter rows specifically containing yesterday dispatch notes
+    # Target keyword search across forward-filled Adjustment_Stock
     yesterday_mask = df_dispatches['Adjustment_Stock'].astype(str).str.contains('yesterday|vehicle|\d{2}\.\d{2}\.\d{4}', case=False, na=False)
     df_yesterday_dispatches = df_dispatches[yesterday_mask].copy()
 
