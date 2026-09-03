@@ -10,6 +10,22 @@ from reportlab.platypus import (
 )
 from reportlab.lib.styles import ParagraphStyle
 
+def parse_qty(v):
+    """Splits slash-separated quantities (e.g. '17.86/33.55') and returns their sum (51.41)."""
+    if pd.isna(v) or not str(v).strip():
+        return 0.0
+    
+    parts = re.split(r'[/+]', str(v).strip())
+    total_qty = 0.0
+    for part in parts:
+        clean_num = re.sub(r'[^0-9\.]', '', part.strip())
+        if clean_num:
+            try:
+                total_qty += float(clean_num)
+            except:
+                pass
+    return total_qty
+
 def parse_loading_time_to_hours(val):
     """Converts strings like '18 HRS', '1.5 HRS', '20 MIN.', '30 MIN.' to float hours."""
     if pd.isna(val) or not str(val).strip():
@@ -84,20 +100,15 @@ def generate_pdf_report(excel_file):
         df_c.columns = [str(c).strip() for c in df_c.columns]
         col_map = {c.lower(): c for c in df_c.columns}
         
-        # 1. Quantity Extraction
+        # 1. Total Dispatched Quantity Calculation (Sums all / separated values)
         qnty_col = next((col_map[c] for c in col_map if any(k in c for k in ['qnty', 'quantity', 'qty', 'weight', 'tonnage'])), None)
         total_qty = 0.0
         qty_series = pd.Series([0.0] * len(df_c))
         if qnty_col:
-            def parse_qty(v):
-                if pd.isna(v): return 0.0
-                v_str = str(v).split('/')[0].strip()
-                try: return float(v_str)
-                except: return 0.0
             qty_series = df_c[qnty_col].apply(parse_qty)
             total_qty = qty_series.sum()
 
-        # 2. Loading Time Calculation
+        # 2. Loading Time Duration Calculation
         time_col = next((col_map[c] for c in col_map if any(k in c for k in ['loading time', 'time', 'duration', 'loading'])), None)
         total_loading_hours = 0.0
         avg_loading_hours = 0.0
@@ -113,7 +124,7 @@ def generate_pdf_report(excel_file):
             freight_vals = [parse_freight_amount(df_c[freight_col].iloc[i], qty_series.iloc[i]) for i in range(len(df_c))]
             total_freight_amt = sum(freight_vals)
 
-        # 4. Party Count & Pending Statuses
+        # 4. Party Count & Pending Order Breakdown
         party_col = next((col_map[c] for c in col_map if any(k in c for k in ['party', 'customer', 'name'])), None)
         unique_parties = df_c[party_col].nunique() if party_col else len(df_c)
 
@@ -179,11 +190,6 @@ def generate_pdf_report(excel_file):
         qnty_col = next((df_total.columns[i] for i, c in enumerate(df_c_cols) if any(k in c for k in ['qnty', 'quantity', 'qty', 'weight'])), None)
         qty_series = pd.Series([0.0] * len(df_total))
         if qnty_col:
-            def parse_qty(v):
-                if pd.isna(v): return 0.0
-                v_str = str(v).split('/')[0].strip()
-                try: return float(v_str)
-                except: return 0.0
             qty_series = df_total[qnty_col].apply(parse_qty)
 
         total_row = {}
@@ -193,22 +199,28 @@ def generate_pdf_report(excel_file):
         for col in df_total.columns:
             col_str = str(col).lower()
             
+            # Freight column totaling
             if 'freight' in col_str:
                 freight_sum = sum([parse_freight_amount(df_total[col].iloc[i], qty_series.iloc[i]) for i in range(len(df_total))])
                 total_row[col] = f"₹{freight_sum:,.2f}"
                 has_numeric = True
+            # Loading time column totaling
             elif any(k in col_str for k in ['loading time', 'time', 'duration']):
                 time_sum = df_total[col].apply(parse_loading_time_to_hours).sum()
                 total_row[col] = f"{time_sum:,.2f} HRS"
                 has_numeric = True
+            # Quantity column totaling (handles slashed sums)
+            elif any(k in col_str for k in ['qnty', 'quantity', 'qty', 'weight']):
+                q_sum = qty_series.sum()
+                total_row[col] = f"{q_sum:,.2f}"
+                has_numeric = True
             else:
-                def parse_num(v):
+                def parse_generic_num(v):
                     if pd.isna(v): return None
-                    v_s = str(v).split('/')[0].strip()
-                    try: return float(v_s)
+                    try: return float(re.sub(r'[^0-9\.]', '', str(v)))
                     except: return None
 
-                numeric_series = df_total[col].apply(parse_num)
+                numeric_series = df_total[col].apply(parse_generic_num)
                 if numeric_series.notna().sum() > 0 and not any(k in col_str for k in ignore_keys):
                     total_row[col] = numeric_series.sum()
                     has_numeric = True
