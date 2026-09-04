@@ -27,9 +27,35 @@ def clean_column_names(df):
     df.columns = [str(col).strip() for col in df.columns]
     return df
 
+def parse_slash_separated_qty(val):
+    """Splits values separated by '/' (e.g., '10/20.5/5' or '15') and returns their sum."""
+    if pd.isna(val):
+        return 0.0
+    val_str = str(val).strip()
+    if '/' in val_str:
+        parts = val_str.split('/')
+        total = 0.0
+        for p in parts:
+            try:
+                total += float(p.strip())
+            except ValueError:
+                pass
+        return total
+    else:
+        try:
+            return float(val_str)
+        except ValueError:
+            return 0.0
+
 def calculate_logistics_kpis(df):
     kpis = {}
     
+    # Pre-process QTY with slash separation support
+    if "QTY" in df.columns:
+        df["QTY_NUM"] = df["QTY"].apply(parse_slash_separated_qty)
+    else:
+        df["QTY_NUM"] = 0.0
+
     # 1. Unique Vehicle Count
     if "VEHICLE NO." in df.columns:
         kpis["Unique Vehicles Count"] = df["VEHICLE NO."].dropna().nunique()
@@ -47,25 +73,22 @@ def calculate_logistics_kpis(df):
         raw_invoices = df["INVOICE NO."].dropna().astype(str).tolist()
         split_invoices = set()
         for inv in raw_invoices:
-            # Splits invoices containing slashes (e.g., "INV101/INV102")
             parts = [p.strip() for p in inv.split('/') if p.strip()]
             split_invoices.update(parts)
         kpis["Unique Invoices Count"] = len(split_invoices)
         
-    # 5. Sum of QTY
+    # 5. Sum of QTY (Including Slash-Separated QTYs)
     if "QTY" in df.columns:
-        df["QTY_NUM"] = pd.to_numeric(df["QTY"], errors='coerce').fillna(0)
         kpis["Total Quantity (MT)"] = df["QTY_NUM"].sum()
         
-    # 6. Calculated Freight (Handling /PMT rates vs Fixed rates)
+    # 6. Calculated Freight (Handling /PMT rates multiplied by Total QTY vs Fixed rates)
     if "FREIGHT (IF)" in df.columns:
         total_freight = 0.0
         for _, row in df.iterrows():
             freight_str = str(row["FREIGHT (IF)"]).upper().strip()
-            qty = float(row.get("QTY_NUM", 0))
+            qty = float(row.get("QTY_NUM", 0.0))
             
             if "PMT" in freight_str:
-                # Extract numerical value from strings like "500/PMT" or "500 PMT"
                 clean_num = ''.join(c for c in freight_str.replace("PMT", "").replace("/", "") if c.isdigit() or c == '.')
                 try:
                     total_freight += float(clean_num) * qty
@@ -192,7 +215,6 @@ if report_mode == "Single Day View":
             if "HR AND ADMIN" in excel_today:
                 df_hr = excel_today["HR AND ADMIN"]
                 
-                # Check for 3rd Column and display notice
                 if len(df_hr.columns) >= 3:
                     third_col_name = df_hr.columns[2]
                     st.info(f"Dynamic 3rd Column Detected: **{third_col_name}**")
@@ -207,7 +229,7 @@ if report_mode == "Single Day View":
             if "LOGISTICS AND DISPATCH" in excel_today:
                 df_log = excel_today["LOGISTICS AND DISPATCH"]
                 
-                # Key Metrics Display
+                # Dynamic KPI calculation including slash-separated QTYs
                 st.subheader("📌 Key Logistics Performance Indicators")
                 kpis = calculate_logistics_kpis(df_log)
                 display_kpis_safely(kpis)
@@ -219,15 +241,15 @@ if report_mode == "Single Day View":
                 st.subheader("📊 Visual Analytics")
                 g1, g2, g3 = st.columns(3)
                 
-                # Graph 1: Party Name vs Qty
+                # Graph 1: Party Name vs Qty (Calculated using slash-separated sums)
                 with g1:
                     if "PARTY NAME (CUSTOMER)" in df_log.columns and "QTY" in df_log.columns:
-                        df_log["QTY_NUM"] = pd.to_numeric(df_log["QTY"], errors='coerce').fillna(0)
                         fig1 = px.bar(
                             df_log, 
                             x="PARTY NAME (CUSTOMER)", 
                             y="QTY_NUM", 
                             title="Total Quantity (MT) per Party Name",
+                            labels={"QTY_NUM": "Quantity (MT)"},
                             color="PARTY NAME (CUSTOMER)"
                         )
                         st.plotly_chart(fig1, use_container_width=True)
@@ -241,6 +263,7 @@ if report_mode == "Single Day View":
                             x="PARTY NAME (CUSTOMER)", 
                             y="LOADING_NUM", 
                             title="Total Loading Time (Hrs) per Party Name",
+                            labels={"LOADING_NUM": "Loading Hours"},
                             color_discrete_sequence=["#FF9900"]
                         )
                         st.plotly_chart(fig2, use_container_width=True)
