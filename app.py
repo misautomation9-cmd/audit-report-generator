@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import matplotlib.pyplot as plt
 
 # ReportLab Imports for Advanced PDF Generation
 from reportlab.lib.pagesizes import A4, landscape
@@ -117,7 +118,7 @@ def display_kpis_safely(kpis):
                 cols[idx].metric(label=k, value=val_str)
 
 def generate_pdf_report(excel_data_dict, chart_images=None):
-    """Generates landscape PDF report with auto-wrapped tables and embedded Plotly images."""
+    """Generates landscape PDF report with auto-wrapped tables and embedded static graph images."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, 
@@ -185,7 +186,7 @@ def generate_pdf_report(excel_data_dict, chart_images=None):
         img_elements = []
         for img_bytes in chart_images:
             img_buf = io.BytesIO(img_bytes)
-            img_elements.append(RLImage(img_buf, width=380, height=200))
+            img_elements.append(RLImage(img_buf, width=380, height=190))
         
         chart_rows = []
         for i in range(0, len(img_elements), 2):
@@ -205,6 +206,76 @@ def generate_pdf_report(excel_data_dict, chart_images=None):
     doc.build(story)
     buffer.seek(0)
     return buffer
+
+def generate_pdf_chart_bytes(df_log):
+    """Generates graph images using Matplotlib with direct data labels for PDF embedding."""
+    chart_bytes_list = []
+    
+    if "PARTY NAME (CUSTOMER)" not in df_log.columns:
+        return chart_bytes_list
+
+    # 1. Bar Chart: Total Quantity per Customer
+    if "QTY_NUM" in df_log.columns:
+        fig1, ax1 = plt.subplots(figsize=(7, 3.5))
+        party_qty = df_log.groupby("PARTY NAME (CUSTOMER)")["QTY_NUM"].sum().reset_index()
+        party_qty = party_qty[party_qty["QTY_NUM"] > 0]
+        
+        bars1 = ax1.bar(party_qty["PARTY NAME (CUSTOMER)"], party_qty["QTY_NUM"], color='#1f77b4')
+        ax1.bar_label(bars1, fmt='%.2f', padding=3, fontsize=7)
+        ax1.set_title("Total Quantity (MT) per Party Name", fontsize=9, fontweight='bold')
+        ax1.set_ylabel("Quantity (MT)", fontsize=8)
+        plt.xticks(rotation=45, ha='right', fontsize=6)
+        plt.tight_layout()
+        
+        buf1 = io.BytesIO()
+        plt.savefig(buf1, format='png', dpi=150)
+        buf1.seek(0)
+        chart_bytes_list.append(buf1.getvalue())
+        plt.close(fig1)
+
+    # 2. Bar Chart: Total Loading Time per Customer
+    if "LOADING_NUM" in df_log.columns:
+        fig2, ax2 = plt.subplots(figsize=(7, 3.5))
+        party_load = df_log.groupby("PARTY NAME (CUSTOMER)")["LOADING_NUM"].sum().reset_index()
+        party_load = party_load[party_load["LOADING_NUM"] > 0]
+        
+        bars2 = ax2.bar(party_load["PARTY NAME (CUSTOMER)"], party_load["LOADING_NUM"], color='#ff7f0e')
+        ax2.bar_label(bars2, fmt='%.1f', padding=3, fontsize=7)
+        ax2.set_title("Total Loading Time (Hrs) per Party Name", fontsize=9, fontweight='bold')
+        ax2.set_ylabel("Loading Hours", fontsize=8)
+        plt.xticks(rotation=45, ha='right', fontsize=6)
+        plt.tight_layout()
+        
+        buf2 = io.BytesIO()
+        plt.savefig(buf2, format='png', dpi=150)
+        buf2.seek(0)
+        chart_bytes_list.append(buf2.getvalue())
+        plt.close(fig2)
+
+    # 3. Pie Chart: Unique Invoices per Customer
+    if "INVOICE NO." in df_log.columns:
+        fig3, ax3 = plt.subplots(figsize=(7, 3.5))
+        inv_df = df_log.groupby("PARTY NAME (CUSTOMER)")["INVOICE NO."].nunique().reset_index()
+        inv_df.columns = ["PARTY NAME (CUSTOMER)", "Invoice Count"]
+        inv_df = inv_df[inv_df["Invoice Count"] > 0]
+        
+        wedges, texts, autotexts = ax3.pie(
+            inv_df["Invoice Count"], 
+            labels=inv_df["PARTY NAME (CUSTOMER)"], 
+            autopct='%1.0f', 
+            textprops=dict(fontsize=6),
+            startangle=140
+        )
+        ax3.set_title("No. of Unique Invoices per Customer", fontsize=9, fontweight='bold')
+        plt.tight_layout()
+        
+        buf3 = io.BytesIO()
+        plt.savefig(buf3, format='png', dpi=150)
+        buf3.seek(0)
+        chart_bytes_list.append(buf3.getvalue())
+        plt.close(fig3)
+
+    return chart_bytes_list
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("📁 Data Controls")
@@ -240,19 +311,20 @@ else:
 
 if report_mode == "Single Day View":
     if excel_today:
-        # PRE-GENERATE CHARTS WITH DATA LABELS
         single_day_figs = []
+        pdf_chart_bytes = []
+
         if "LOGISTICS AND DISPATCH" in excel_today:
             df_log_prep = excel_today["LOGISTICS AND DISPATCH"]
             calculate_logistics_kpis(df_log_prep)
             
-            # 1. Quantity Bar Chart with Data Labels
+            # Interactive Streamlit Plotly Charts (with Data Labels)
             if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "QTY" in df_log_prep.columns:
                 fig1 = px.bar(
                     df_log_prep, 
                     x="PARTY NAME (CUSTOMER)", 
                     y="QTY_NUM", 
-                    text_auto='.2f',  # Displays rounded values directly on top of bars
+                    text_auto='.2f',
                     title="Total Quantity (MT) per Party Name",
                     labels={"QTY_NUM": "Quantity (MT)"},
                     color="PARTY NAME (CUSTOMER)"
@@ -260,13 +332,12 @@ if report_mode == "Single Day View":
                 fig1.update_traces(textposition='outside')
                 single_day_figs.append(fig1)
 
-            # 2. Loading Time Bar Chart with Data Labels
             if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "LOADING TIME" in df_log_prep.columns:
                 fig2 = px.bar(
                     df_log_prep, 
                     x="PARTY NAME (CUSTOMER)", 
                     y="LOADING_NUM", 
-                    text_auto='.1f',  # Displays loading hours on top of bars
+                    text_auto='.1f',
                     title="Total Loading Time (Hrs) per Party Name",
                     labels={"LOADING_NUM": "Loading Hours"},
                     color_discrete_sequence=["#FF9900"]
@@ -274,7 +345,6 @@ if report_mode == "Single Day View":
                 fig2.update_traces(textposition='outside')
                 single_day_figs.append(fig2)
 
-            # 3. Unique Invoices Pie Chart with Data Labels
             if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "INVOICE NO." in df_log_prep.columns:
                 inv_df = df_log_prep.groupby("PARTY NAME (CUSTOMER)")["INVOICE NO."].nunique().reset_index()
                 inv_df.columns = ["PARTY NAME (CUSTOMER)", "Invoice Count"]
@@ -284,8 +354,11 @@ if report_mode == "Single Day View":
                     values="Invoice Count", 
                     title="No. of Unique Invoices per Customer"
                 )
-                fig3.update_traces(textinfo='value+percent', textposition='inside') # Shows exact count & % inside slices
+                fig3.update_traces(textinfo='value+percent', textposition='inside')
                 single_day_figs.append(fig3)
+
+            # Generate robust PDF static graphs
+            pdf_chart_bytes = generate_pdf_chart_bytes(df_log_prep)
 
         tab_hr, tab_log = st.tabs(["HR AND ADMIN", "LOGISTICS AND DISPATCH"])
         
@@ -329,17 +402,7 @@ if report_mode == "Single Day View":
             else:
                 st.warning("Sheet 'LOGISTICS AND DISPATCH' not found in uploaded file.")
 
-        # CONVERT PRE-GENERATED CHARTS TO IMAGES FOR PDF EXPORT
-        chart_bytes = []
-        for fig in single_day_figs:
-            try:
-                img_data = fig.to_image(format="png", width=700, height=400)
-                chart_bytes.append(img_data)
-            except Exception:
-                st.sidebar.warning("Make sure `kaleido` is installed: `pip install kaleido`")
-                break
-
-        pdf_buf = generate_pdf_report({"Today": excel_today}, chart_images=chart_bytes)
+        pdf_buf = generate_pdf_report({"Today": excel_today}, chart_images=pdf_chart_bytes)
         st.sidebar.download_button("📥 Download PDF Report (With Graphs & Data Labels)", pdf_buf, "Daily_Audit_Report.pdf", "application/pdf")
 
     else:
@@ -393,14 +456,12 @@ else:
                 df_comp = pd.DataFrame(comp_rows)
                 st.dataframe(df_comp, use_container_width=True)
                 
-                # Comparison Chart with Data Labels
                 fig_comp = go.Figure(data=[
                     go.Bar(name='Yesterday', x=df_comp['Metric Name'], y=df_comp['Yesterday'], text=df_comp['Yesterday'], textposition='outside', marker_color='#AB63FA'),
                     go.Bar(name='Today', x=df_comp['Metric Name'], y=df_comp['Today'], text=df_comp['Today'], textposition='outside', marker_color='#00CC96')
                 ])
                 fig_comp.update_layout(barmode='group', title="Logistics KPI Comparison")
                 st.plotly_chart(fig_comp, use_container_width=True)
-                comp_figs.append(fig_comp)
                 
                 c1, c2 = st.columns(2)
                 with c1:
@@ -410,18 +471,14 @@ else:
                     st.subheader("📅 Today's Raw Data")
                     st.dataframe(df_log_t, use_container_width=True)
 
-        chart_bytes = []
-        for fig in comp_figs:
-            try:
-                img_data = fig.to_image(format="png", width=700, height=400)
-                chart_bytes.append(img_data)
-            except Exception:
-                pass
+        comp_pdf_bytes = []
+        if "LOGISTICS AND DISPATCH" in excel_today:
+            comp_pdf_bytes = generate_pdf_chart_bytes(excel_today["LOGISTICS AND DISPATCH"])
 
         pdf_buf = generate_pdf_report({
             f"Yesterday ({file_yesterday.name})": excel_yesterday,
             f"Today ({file_today.name})": excel_today
-        }, chart_images=chart_bytes)
+        }, chart_images=comp_pdf_bytes)
         st.sidebar.download_button("📥 Download Comparative PDF Report", pdf_buf, "Comparative_Audit_Report.pdf", "application/pdf")
     else:
         st.info("Please upload both Yesterday's and Today's Excel files to view comparison metrics.")
