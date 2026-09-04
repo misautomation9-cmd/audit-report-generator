@@ -1,6 +1,7 @@
 import io
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
@@ -13,12 +14,12 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Operations Audit: HR, Admin & Logistics",
+    page_title="Operations Audit: HR, Admin, Logistics & PO",
     page_icon="🚚",
     layout="wide"
 )
 
-st.title("🚚 AUDIT & OPERATIONS DASHBOARD: HR, ADMIN & LOGISTICS")
+st.title("🚚 AUDIT & OPERATIONS DASHBOARD: HR, ADMIN, LOGISTICS & PURCHASE ORDER")
 st.caption("Upload daily Excel files to generate single-day reports or run side-by-side date comparisons.")
 
 # --- HELPER FUNCTIONS ---
@@ -46,6 +47,16 @@ def parse_slash_separated_qty(val):
         except ValueError:
             return 0.0
 
+def parse_numeric_clean(val):
+    """Cleans numeric input strings removing currency symbols or commas."""
+    if pd.isna(val):
+        return 0.0
+    val_str = str(val).replace("₹", "").replace(",", "").strip()
+    try:
+        return float(val_str)
+    except ValueError:
+        return 0.0
+
 def parse_loading_time(val):
     if pd.isna(val):
         return 0.0
@@ -72,6 +83,8 @@ def parse_loading_time(val):
             return float(val_str)
         except ValueError:
             return 0.0
+
+# --- KPI CALCULATORS ---
 
 def calculate_logistics_kpis(df):
     kpis = {}
@@ -137,6 +150,45 @@ def calculate_logistics_kpis(df):
 
     return kpis
 
+def calculate_po_kpis(df):
+    kpis = {}
+    
+    # Pre-clean numeric columns
+    qty_col = next((c for c in df.columns if "QTY" in c.upper()), None)
+    if qty_col:
+        df["PO_QTY_NUM"] = df[qty_col].apply(parse_slash_separated_qty)
+    else:
+        df["PO_QTY_NUM"] = 0.0
+
+    rate_col = next((c for c in df.columns if "RATE" in c.upper()), None)
+    if rate_col:
+        df["PO_RATE_NUM"] = df[rate_col].apply(parse_numeric_clean)
+    else:
+        df["PO_RATE_NUM"] = 0.0
+
+    # Unique Counts
+    po_col = next((c for c in df.columns if "PO" in c.upper() or "NO" in c.upper()), None)
+    kpis["Unique PO Count"] = df[po_col].dropna().nunique() if po_col else 0
+
+    party_col = next((c for c in df.columns if "PARTY" in c.upper()), None)
+    kpis["Unique Party Name Count"] = df[party_col].dropna().nunique() if party_col else 0
+
+    desc_col = next((c for c in df.columns if "DISCRIPTION" in c.upper() or "DESCRIPTION" in c.upper()), None)
+    kpis["Unique Description Count"] = df[desc_col].dropna().nunique() if desc_col else 0
+
+    size_col = next((c for c in df.columns if "SIZE" in c.upper()), None)
+    kpis["Unique Size Count"] = df[size_col].dropna().nunique() if size_col else 0
+
+    grade_col = next((c for c in df.columns if "GRADE" in c.upper()), None)
+    kpis["Unique Grade Count"] = df[grade_col].dropna().nunique() if grade_col else 0
+
+    # Aggregations
+    kpis["Sum of Qty (MT)"] = df["PO_QTY_NUM"].sum()
+    kpis["Sum of Purchase Rate (₹)"] = df["PO_RATE_NUM"].sum()
+    kpis["Average Purchase Rate (₹)"] = df["PO_RATE_NUM"].mean() if len(df["PO_RATE_NUM"]) > 0 else 0.0
+
+    return kpis
+
 def display_kpis_safely(kpis):
     if kpis:
         max_cols_per_row = 4
@@ -148,7 +200,9 @@ def display_kpis_safely(kpis):
                 val_str = f"{v:,.2f}" if isinstance(v, float) else str(v)
                 cols[idx].metric(label=k, value=val_str)
 
-def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None, df_comp=None):
+# --- PDF GENERATOR ---
+
+def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None, kpi_data_po=None, df_comp=None, df_comp_po=None):
     """Generates PDF report including data tables, single/comparison KPIs, and embedded graphs."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -172,17 +226,17 @@ def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None, df_co
     kpi_title_style = ParagraphStyle(name="KPITitle", fontName="Helvetica-Bold", fontSize=7, leading=8, textColor=colors.HexColor('#566573'), alignment=1)
     kpi_val_style = ParagraphStyle(name="KPIVal", fontName="Helvetica-Bold", fontSize=12, leading=14, textColor=colors.HexColor('#1A252F'), alignment=1)
 
+    comp_hdr_style = ParagraphStyle(name="CompHeader", fontName="Helvetica-Bold", fontSize=7, leading=8, textColor=colors.white, alignment=1)
+    comp_body_style = ParagraphStyle(name="CompBody", fontName="Helvetica", fontSize=7, leading=8, textColor=colors.HexColor('#2C3E50'), alignment=0)
+    comp_num_style = ParagraphStyle(name="CompNum", fontName="Helvetica", fontSize=7, leading=8, textColor=colors.HexColor('#2C3E50'), alignment=1)
+
     story.append(Paragraph("OPERATIONS & AUDIT COMPREHENSIVE REPORT", title_style))
     story.append(Spacer(1, 10))
 
-    # 1. ADD COMPARISON VARIANCE TABLE (IF MULTI-DAY VIEW)
+    # 1. ADD COMPARISON VARIANCE TABLES (IF MULTI-DAY VIEW)
     if df_comp is not None and not df_comp.empty:
-        story.append(Paragraph("KPI Variance Summary", subtitle_style))
+        story.append(Paragraph("Logistics KPI Variance Summary", subtitle_style))
         story.append(Spacer(1, 6))
-
-        comp_hdr_style = ParagraphStyle(name="CompHeader", fontName="Helvetica-Bold", fontSize=7, leading=8, textColor=colors.white, alignment=1)
-        comp_body_style = ParagraphStyle(name="CompBody", fontName="Helvetica", fontSize=7, leading=8, textColor=colors.HexColor('#2C3E50'), alignment=0)
-        comp_num_style = ParagraphStyle(name="CompNum", fontName="Helvetica", fontSize=7, leading=8, textColor=colors.HexColor('#2C3E50'), alignment=1)
 
         comp_table_data = [[
             Paragraph("Metric Name", comp_hdr_style),
@@ -210,8 +264,38 @@ def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None, df_co
         story.append(comp_table)
         story.append(Spacer(1, 12))
 
+    if df_comp_po is not None and not df_comp_po.empty:
+        story.append(Paragraph("Purchase Order KPI Variance Summary", subtitle_style))
+        story.append(Spacer(1, 6))
+
+        po_comp_table_data = [[
+            Paragraph("Metric Name", comp_hdr_style),
+            Paragraph("Yesterday", comp_hdr_style),
+            Paragraph("Today", comp_hdr_style),
+            Paragraph("Variance (Difference)", comp_hdr_style)
+        ]]
+
+        for _, row in df_comp_po.iterrows():
+            po_comp_table_data.append([
+                Paragraph(str(row["Metric Name"]), comp_body_style),
+                Paragraph(f"{row['Yesterday']:,.2f}".rstrip('0').rstrip('.'), comp_num_style),
+                Paragraph(f"{row['Today']:,.2f}".rstrip('0').rstrip('.'), comp_num_style),
+                Paragraph(f"{row['Variance (Difference)']:,.2f}".rstrip('0').rstrip('.'), comp_num_style)
+            ])
+
+        po_comp_table = Table(po_comp_table_data, colWidths=[250, 180, 180, 202])
+        po_comp_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2E4053')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#BDC3C7')),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(po_comp_table)
+        story.append(Spacer(1, 12))
+
     # 2. ADD SINGLE-DAY KPI CARDS (IF SINGLE-DAY VIEW)
-    elif kpi_data:
+    if kpi_data and df_comp is None:
         story.append(Paragraph("Key Logistics Performance Indicators", subtitle_style))
         story.append(Spacer(1, 6))
 
@@ -239,6 +323,36 @@ def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None, df_co
             ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
         ]))
         story.append(kpi_card_table)
+        story.append(Spacer(1, 12))
+
+    if kpi_data_po and df_comp_po is None:
+        story.append(Paragraph("Purchase Order Performance Indicators", subtitle_style))
+        story.append(Spacer(1, 6))
+
+        po_kpi_list = list(kpi_data_po.items())
+        p_row1 = po_kpi_list[:4]
+        p_row2 = po_kpi_list[4:]
+
+        po_kpi_table_data = [
+            [Paragraph(k, kpi_title_style) for k, _ in p_row1],
+            [Paragraph(f"{v:,.2f}" if isinstance(v, float) else str(v), kpi_val_style) for _, v in p_row1]
+        ]
+
+        if p_row2:
+            po_kpi_table_data.append([Paragraph(k, kpi_title_style) for k, _ in p_row2])
+            po_kpi_table_data.append([Paragraph(f"{v:,.2f}" if isinstance(v, float) else str(v), kpi_val_style) for _, v in p_row2])
+
+        num_po_cols = len(p_row1)
+        po_kpi_card_table = Table(po_kpi_table_data, colWidths=[812 / num_po_cols] * num_po_cols)
+        po_kpi_card_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#F4F6F6')),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D5D8DC')),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(po_kpi_card_table)
         story.append(Spacer(1, 12))
 
     # 3. EMBED VISUAL CHARTS
@@ -272,9 +386,10 @@ def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None, df_co
         story.append(Paragraph(f"Data Set Source: {file_label}", subtitle_style))
         story.append(Spacer(1, 8))
 
-        for sheet_name in ["HR AND ADMIN", "LOGISTICS AND DISPATCH"]:
-            if sheet_name in excel_data:
-                df = excel_data[sheet_name]
+        for sheet_name in ["HR AND ADMIN", "LOGISTICS AND DISPATCH", "PURCHASE ORDER"]:
+            matched_key = next((k for k in excel_data.keys() if sheet_name in k.upper()), None)
+            if matched_key:
+                df = excel_data[matched_key]
                 story.append(Paragraph(f"Module: {sheet_name}", heading_style))
                 story.append(Spacer(1, 4))
 
@@ -306,13 +421,12 @@ def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None, df_co
     buffer.seek(0)
     return buffer
 
-def generate_pdf_chart_bytes(df_log, df_comp=None):
+def generate_pdf_chart_bytes(df_log=None, df_po=None, df_comp=None, df_comp_po=None):
     """Generates graph images using Matplotlib for PDF embedding."""
     chart_bytes_list = []
 
-    # 1. Comparison Bar Chart (If df_comp is provided)
+    # 1. Logistics Comparison Bar Chart (If df_comp is provided)
     if df_comp is not None and not df_comp.empty:
-        import numpy as np
         fig_c, ax_c = plt.subplots(figsize=(8, 3.8))
         
         metrics = df_comp['Metric Name'].tolist()
@@ -339,47 +453,142 @@ def generate_pdf_chart_bytes(df_log, df_comp=None):
         buf_c.seek(0)
         chart_bytes_list.append(buf_c.getvalue())
         plt.close(fig_c)
+
+    # 2. Purchase Order Comparison Bar Chart (If df_comp_po is provided)
+    if df_comp_po is not None and not df_comp_po.empty:
+        fig_poc, ax_poc = plt.subplots(figsize=(8, 3.8))
+        
+        po_metrics = df_comp_po['Metric Name'].tolist()
+        po_yest_vals = df_comp_po['Yesterday'].tolist()
+        po_tod_vals = df_comp_po['Today'].tolist()
+        
+        x_po = np.arange(len(po_metrics))
+        width = 0.35
+        
+        p_bars1 = ax_poc.bar(x_po - width/2, po_yest_vals, width, label='Yesterday', color='#3498DB')
+        p_bars2 = ax_poc.bar(x_po + width/2, po_tod_vals, width, label='Today', color='#2ECC71')
+        
+        ax_poc.bar_label(p_bars1, fmt='%.2f', padding=2, fontsize=5)
+        ax_poc.bar_label(p_bars2, fmt='%.2f', padding=2, fontsize=5)
+        
+        ax_poc.set_title("Purchase Order KPI Comparison", fontsize=9, fontweight='bold')
+        ax_poc.set_xticks(x_po)
+        ax_poc.set_xticklabels(po_metrics, rotation=25, ha='right', fontsize=6)
+        ax_poc.legend(fontsize=7)
+        plt.tight_layout()
+        
+        buf_poc = io.BytesIO()
+        plt.savefig(buf_poc, format='png', dpi=150)
+        buf_poc.seek(0)
+        chart_bytes_list.append(buf_poc.getvalue())
+        plt.close(fig_poc)
     
-    if df_log is None or "PARTY NAME (CUSTOMER)" not in df_log.columns:
-        return chart_bytes_list
+    # 3. Logistics Charts
+    if df_log is not None and "PARTY NAME (CUSTOMER)" in df_log.columns:
+        if "QTY_NUM" in df_log.columns:
+            fig1, ax1 = plt.subplots(figsize=(7, 3.5))
+            party_qty = df_log.groupby("PARTY NAME (CUSTOMER)")["QTY_NUM"].sum().reset_index()
+            party_qty = party_qty[party_qty["QTY_NUM"] > 0]
+            
+            bars1 = ax1.bar(party_qty["PARTY NAME (CUSTOMER)"], party_qty["QTY_NUM"], color='#1f77b4')
+            ax1.bar_label(bars1, fmt='%.2f', padding=3, fontsize=7)
+            ax1.set_title("Total Quantity (MT) per Party Name", fontsize=9, fontweight='bold')
+            ax1.set_ylabel("Quantity (MT)", fontsize=8)
+            plt.xticks(rotation=45, ha='right', fontsize=6)
+            plt.tight_layout()
+            
+            buf1 = io.BytesIO()
+            plt.savefig(buf1, format='png', dpi=150)
+            buf1.seek(0)
+            chart_bytes_list.append(buf1.getvalue())
+            plt.close(fig1)
 
-    # 2. Bar Chart: Total Quantity per Customer
-    if "QTY_NUM" in df_log.columns:
-        fig1, ax1 = plt.subplots(figsize=(7, 3.5))
-        party_qty = df_log.groupby("PARTY NAME (CUSTOMER)")["QTY_NUM"].sum().reset_index()
-        party_qty = party_qty[party_qty["QTY_NUM"] > 0]
-        
-        bars1 = ax1.bar(party_qty["PARTY NAME (CUSTOMER)"], party_qty["QTY_NUM"], color='#1f77b4')
-        ax1.bar_label(bars1, fmt='%.2f', padding=3, fontsize=7)
-        ax1.set_title("Total Quantity (MT) per Party Name", fontsize=9, fontweight='bold')
-        ax1.set_ylabel("Quantity (MT)", fontsize=8)
-        plt.xticks(rotation=45, ha='right', fontsize=6)
-        plt.tight_layout()
-        
-        buf1 = io.BytesIO()
-        plt.savefig(buf1, format='png', dpi=150)
-        buf1.seek(0)
-        chart_bytes_list.append(buf1.getvalue())
-        plt.close(fig1)
+        if "LOADING_NUM" in df_log.columns:
+            fig2, ax2 = plt.subplots(figsize=(7, 3.5))
+            party_load = df_log.groupby("PARTY NAME (CUSTOMER)")["LOADING_NUM"].sum().reset_index()
+            party_load = party_load[party_load["LOADING_NUM"] > 0]
+            
+            bars2 = ax2.bar(party_load["PARTY NAME (CUSTOMER)"], party_load["LOADING_NUM"], color='#ff7f0e')
+            ax2.bar_label(bars2, fmt='%.1f', padding=3, fontsize=7)
+            ax2.set_title("Total Loading Time (Hrs) per Party Name", fontsize=9, fontweight='bold')
+            ax2.set_ylabel("Loading Hours", fontsize=8)
+            plt.xticks(rotation=45, ha='right', fontsize=6)
+            plt.tight_layout()
+            
+            buf2 = io.BytesIO()
+            plt.savefig(buf2, format='png', dpi=150)
+            buf2.seek(0)
+            chart_bytes_list.append(buf2.getvalue())
+            plt.close(fig2)
 
-    # 3. Bar Chart: Total Loading Time per Customer
-    if "LOADING_NUM" in df_log.columns:
-        fig2, ax2 = plt.subplots(figsize=(7, 3.5))
-        party_load = df_log.groupby("PARTY NAME (CUSTOMER)")["LOADING_NUM"].sum().reset_index()
-        party_load = party_load[party_load["LOADING_NUM"] > 0]
-        
-        bars2 = ax2.bar(party_load["PARTY NAME (CUSTOMER)"], party_load["LOADING_NUM"], color='#ff7f0e')
-        ax2.bar_label(bars2, fmt='%.1f', padding=3, fontsize=7)
-        ax2.set_title("Total Loading Time (Hrs) per Party Name", fontsize=9, fontweight='bold')
-        ax2.set_ylabel("Loading Hours", fontsize=8)
-        plt.xticks(rotation=45, ha='right', fontsize=6)
-        plt.tight_layout()
-        
-        buf2 = io.BytesIO()
-        plt.savefig(buf2, format='png', dpi=150)
-        buf2.seek(0)
-        chart_bytes_list.append(buf2.getvalue())
-        plt.close(fig2)
+    # 4. Purchase Order Charts
+    if df_po is not None and not df_po.empty:
+        p_col = next((c for c in df_po.columns if "PARTY" in c.upper()), None)
+        q_col = "PO_QTY_NUM"
+        d_col = next((c for c in df_po.columns if "DISCRIPTION" in c.upper() or "DESCRIPTION" in c.upper()), None)
+        t_col = next((c for c in df_po.columns if "THIKNESS" in c.upper() or "THICKNESS" in c.upper()), None)
+        r_col = "PO_RATE_NUM"
+        g_col = next((c for c in df_po.columns if "GRADE" in c.upper()), None)
+
+        # Graph 1: Party Name vs Qty
+        if p_col and q_col in df_po.columns:
+            fig, ax = plt.subplots(figsize=(7, 3.5))
+            grp = df_po.groupby(p_col)[q_col].sum().reset_index()
+            bars = ax.bar(grp[p_col].astype(str), grp[q_col], color='#2980B9')
+            ax.bar_label(bars, fmt='%.1f', padding=2, fontsize=6)
+            ax.set_title("PO: Party Name vs Total Quantity (MT)", fontsize=9, fontweight='bold')
+            plt.xticks(rotation=30, ha='right', fontsize=6)
+            plt.tight_layout()
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150)
+            buf.seek(0)
+            chart_bytes_list.append(buf.getvalue())
+            plt.close(fig)
+
+        # Graph 2: Description vs Qty
+        if d_col and q_col in df_po.columns:
+            fig, ax = plt.subplots(figsize=(7, 3.5))
+            grp = df_po.groupby(d_col)[q_col].sum().reset_index()
+            bars = ax.bar(grp[d_col].astype(str), grp[q_col], color='#27AE60')
+            ax.bar_label(bars, fmt='%.1f', padding=2, fontsize=6)
+            ax.set_title("PO: Description vs Total Quantity (MT)", fontsize=9, fontweight='bold')
+            plt.xticks(rotation=30, ha='right', fontsize=6)
+            plt.tight_layout()
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150)
+            buf.seek(0)
+            chart_bytes_list.append(buf.getvalue())
+            plt.close(fig)
+
+        # Graph 3: Thickness vs Rate
+        if t_col and r_col in df_po.columns:
+            fig, ax = plt.subplots(figsize=(7, 3.5))
+            grp = df_po.groupby(t_col)[r_col].mean().reset_index()
+            bars = ax.bar(grp[t_col].astype(str), grp[r_col], color='#E67E22')
+            ax.bar_label(bars, fmt='%.1f', padding=2, fontsize=6)
+            ax.set_title("PO: Thickness vs Purchase Rate (₹)", fontsize=9, fontweight='bold')
+            plt.xticks(rotation=30, ha='right', fontsize=6)
+            plt.tight_layout()
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150)
+            buf.seek(0)
+            chart_bytes_list.append(buf.getvalue())
+            plt.close(fig)
+
+        # Graph 4: Grade vs Rate
+        if g_col and r_col in df_po.columns:
+            fig, ax = plt.subplots(figsize=(7, 3.5))
+            grp = df_po.groupby(g_col)[r_col].mean().reset_index()
+            bars = ax.bar(grp[g_col].astype(str), grp[r_col], color='#8E44AD')
+            ax.bar_label(bars, fmt='%.1f', padding=2, fontsize=6)
+            ax.set_title("PO: Grade vs Purchase Rate (₹)", fontsize=9, fontweight='bold')
+            plt.xticks(rotation=30, ha='right', fontsize=6)
+            plt.tight_layout()
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150)
+            buf.seek(0)
+            chart_bytes_list.append(buf.getvalue())
+            plt.close(fig)
 
     return chart_bytes_list
 
@@ -420,6 +629,9 @@ if report_mode == "Single Day View":
         single_day_figs = []
         pdf_chart_bytes = []
         kpis_today = {}
+        kpis_po_today = {}
+        df_log_prep = None
+        df_po_prep = None
 
         if "LOGISTICS AND DISPATCH" in excel_today:
             df_log_prep = excel_today["LOGISTICS AND DISPATCH"]
@@ -451,9 +663,14 @@ if report_mode == "Single Day View":
                 fig2.update_traces(textposition='outside')
                 single_day_figs.append(fig2)
 
-            pdf_chart_bytes = generate_pdf_chart_bytes(df_log_prep)
+        po_key_today = next((k for k in excel_today.keys() if "PURCHASE ORDER" in k or "PO" in k), None)
+        if po_key_today:
+            df_po_prep = excel_today[po_key_today]
+            kpis_po_today = calculate_po_kpis(df_po_prep)
 
-        tab_hr, tab_log = st.tabs(["HR AND ADMIN", "LOGISTICS AND DISPATCH"])
+        pdf_chart_bytes = generate_pdf_chart_bytes(df_log=df_log_prep, df_po=df_po_prep)
+
+        tab_hr, tab_log, tab_po = st.tabs(["HR AND ADMIN", "LOGISTICS AND DISPATCH", "PURCHASE ORDER"])
         
         with tab_hr:
             st.header("HR AND ADMIN")
@@ -484,7 +701,40 @@ if report_mode == "Single Day View":
             else:
                 st.warning("Sheet 'LOGISTICS AND DISPATCH' not found in uploaded file.")
 
-        pdf_buf = generate_pdf_report({"Today": excel_today}, chart_images=pdf_chart_bytes, kpi_data=kpis_today)
+        with tab_po:
+            st.header("PURCHASE ORDER")
+            if df_po_prep is not None:
+                st.subheader("📌 Purchase Order Performance Indicators")
+                display_kpis_safely(kpis_po_today)
+                st.markdown("---")
+                st.dataframe(df_po_prep, use_container_width=True)
+                st.markdown("---")
+                st.subheader("📊 Visual Analytics")
+
+                p_col = next((c for c in df_po_prep.columns if "PARTY" in c.upper()), None)
+                d_col = next((c for c in df_po_prep.columns if "DISCRIPTION" in c.upper() or "DESCRIPTION" in c.upper()), None)
+                t_col = next((c for c in df_po_prep.columns if "THIKNESS" in c.upper() or "THICKNESS" in c.upper()), None)
+                g_col = next((c for c in df_po_prep.columns if "GRADE" in c.upper()), None)
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    if p_col:
+                        fig_p1 = px.bar(df_po_prep, x=p_col, y="PO_QTY_NUM", text_auto='.2f', title="Party Name vs Total Quantity (MT)")
+                        st.plotly_chart(fig_p1, use_container_width=True)
+                    if t_col:
+                        fig_p3 = px.bar(df_po_prep, x=t_col, y="PO_RATE_NUM", text_auto='.2f', title="Thickness vs Purchase Rate (₹)")
+                        st.plotly_chart(fig_p3, use_container_width=True)
+                with col2:
+                    if d_col:
+                        fig_p2 = px.bar(df_po_prep, x=d_col, y="PO_QTY_NUM", text_auto='.2f', title="Description vs Total Quantity (MT)")
+                        st.plotly_chart(fig_p2, use_container_width=True)
+                    if g_col:
+                        fig_p4 = px.bar(df_po_prep, x=g_col, y="PO_RATE_NUM", text_auto='.2f', title="Grade vs Purchase Rate (₹)")
+                        st.plotly_chart(fig_p4, use_container_width=True)
+            else:
+                st.warning("Sheet 'PURCHASE ORDER' not found in uploaded file.")
+
+        pdf_buf = generate_pdf_report({"Today": excel_today}, chart_images=pdf_chart_bytes, kpi_data=kpis_today, kpi_data_po=kpis_po_today)
         st.sidebar.download_button("📥 Download PDF Report (With KPIs & Graphs)", pdf_buf, "Daily_Audit_Report.pdf", "application/pdf")
 
     else:
@@ -493,8 +743,9 @@ if report_mode == "Single Day View":
 # MULTIPLE DAY COMPARISON VIEW
 else:
     if excel_yesterday and excel_today:
-        tab_hr, tab_log = st.tabs(["HR AND ADMIN COMPARISON", "LOGISTICS COMPARISON"])
+        tab_hr, tab_log, tab_po = st.tabs(["HR AND ADMIN COMPARISON", "LOGISTICS COMPARISON", "PURCHASE ORDER COMPARISON"])
         df_comp = pd.DataFrame()
+        df_comp_po = pd.DataFrame()
         
         with tab_hr:
             st.header("HR AND ADMIN — Side-by-Side Comparison")
@@ -594,7 +845,50 @@ else:
                     st.subheader("📅 Today's Raw Data")
                     st.dataframe(df_log_t, use_container_width=True)
 
-        comp_pdf_bytes = generate_pdf_chart_bytes(excel_today.get("LOGISTICS AND DISPATCH"), df_comp=df_comp)
+        with tab_po:
+            st.header("PURCHASE ORDER — Side-by-Side & Variance Comparison")
+            po_y_key = next((k for k in excel_yesterday.keys() if "PURCHASE ORDER" in k or "PO" in k), None)
+            po_t_key = next((k for k in excel_today.keys() if "PURCHASE ORDER" in k or "PO" in k), None)
+
+            if po_y_key and po_t_key:
+                df_po_y, df_po_t = excel_yesterday[po_y_key], excel_today[po_t_key]
+                k_po_y, k_po_t = calculate_po_kpis(df_po_y), calculate_po_kpis(df_po_t)
+
+                st.subheader("📈 Purchase Order KPI Variance Summary")
+                po_rows = []
+                for k in k_po_t.keys():
+                    val_y, val_t = k_po_y.get(k, 0.0), k_po_t.get(k, 0.0)
+                    po_rows.append({
+                        "Metric Name": k,
+                        "Yesterday": round(val_y, 2),
+                        "Today": round(val_t, 2),
+                        "Variance (Difference)": round(val_t - val_y, 2)
+                    })
+
+                df_comp_po = pd.DataFrame(po_rows)
+                st.dataframe(df_comp_po, use_container_width=True)
+
+                fig_po_comp = go.Figure(data=[
+                    go.Bar(name='Yesterday', x=df_comp_po['Metric Name'], y=df_comp_po['Yesterday'], text=df_comp_po['Yesterday'], textposition='outside', marker_color='#3498DB'),
+                    go.Bar(name='Today', x=df_comp_po['Metric Name'], y=df_comp_po['Today'], text=df_comp_po['Today'], textposition='outside', marker_color='#2ECC71')
+                ])
+                fig_po_comp.update_layout(title="Purchase Order KPI Comparison", barmode='group', xaxis_tickangle=-30, template="plotly_white")
+                st.plotly_chart(fig_po_comp, use_container_width=True)
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.subheader("📅 Yesterday's PO Data")
+                    st.dataframe(df_po_y, use_container_width=True)
+                with c2:
+                    st.subheader("📅 Today's PO Data")
+                    st.dataframe(df_po_t, use_container_width=True)
+
+        comp_pdf_bytes = generate_pdf_chart_bytes(
+            df_log=excel_today.get("LOGISTICS AND DISPATCH"),
+            df_po=excel_today.get(po_t_key if 'po_t_key' in locals() and po_t_key else "PURCHASE ORDER"),
+            df_comp=df_comp,
+            df_comp_po=df_comp_po
+        )
 
         pdf_buf = generate_pdf_report(
             {
@@ -602,7 +896,8 @@ else:
                 f"Today ({file_today.name})": excel_today
             }, 
             chart_images=comp_pdf_bytes, 
-            df_comp=df_comp
+            df_comp=df_comp,
+            df_comp_po=df_comp_po
         )
         st.sidebar.download_button("📥 Download Comparative PDF Report", pdf_buf, "Comparative_Audit_Report.pdf", "application/pdf")
     else:
