@@ -5,7 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 
-# ReportLab Imports for Advanced PDF Generation
+# ReportLab Imports
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
@@ -24,12 +24,10 @@ st.caption("Upload daily Excel files to generate single-day reports or run side-
 # --- HELPER FUNCTIONS ---
 
 def clean_column_names(df):
-    """Normalizes column names by removing extra spaces and forcing standard casing."""
     df.columns = [str(col).strip() for col in df.columns]
     return df
 
 def parse_slash_separated_qty(val):
-    """Splits values separated by '/' (e.g., '6.3/21.58' or '11.04/3.610') and returns their sum."""
     if pd.isna(val):
         return 0.0
     val_str = str(val).strip()
@@ -49,12 +47,6 @@ def parse_slash_separated_qty(val):
             return 0.0
 
 def parse_loading_time(val):
-    """
-    Parses loading time strings:
-    - If entry is strictly 'OTO' (case-insensitive), returns 0.0.
-    - If entry contains 'OTO/ 1.5', ignores 'OTO' and parses the value after the slash (1.5).
-    - Handles standard numeric inputs or slash-separated numbers.
-    """
     if pd.isna(val):
         return 0.0
     
@@ -156,8 +148,8 @@ def display_kpis_safely(kpis):
                 val_str = f"{v:,.2f}" if isinstance(v, float) else str(v)
                 cols[idx].metric(label=k, value=val_str)
 
-def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None):
-    """Generates landscape PDF report with auto-wrapped tables, KPI summary cards, and embedded static graphs."""
+def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None, df_comp=None):
+    """Generates PDF report including data tables, single/comparison KPIs, and embedded graphs."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, 
@@ -183,44 +175,43 @@ def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None):
     story.append(Paragraph("OPERATIONS & AUDIT COMPREHENSIVE REPORT", title_style))
     story.append(Spacer(1, 10))
 
-    # 1. ADD DATA TABLES
-    for file_label, excel_data in excel_data_dict.items():
-        story.append(Paragraph(f"Data Set Source: {file_label}", subtitle_style))
-        story.append(Spacer(1, 8))
+    # 1. ADD COMPARISON VARIANCE TABLE (IF MULTI-DAY VIEW)
+    if df_comp is not None and not df_comp.empty:
+        story.append(Paragraph("KPI Variance Summary", subtitle_style))
+        story.append(Spacer(1, 6))
 
-        for sheet_name in ["HR AND ADMIN", "LOGISTICS AND DISPATCH"]:
-            if sheet_name in excel_data:
-                df = excel_data[sheet_name]
-                story.append(Paragraph(f"Module: {sheet_name}", heading_style))
-                story.append(Spacer(1, 4))
+        comp_hdr_style = ParagraphStyle(name="CompHeader", fontName="Helvetica-Bold", fontSize=7, leading=8, textColor=colors.white, alignment=1)
+        comp_body_style = ParagraphStyle(name="CompBody", fontName="Helvetica", fontSize=7, leading=8, textColor=colors.HexColor('#2C3E50'), alignment=0)
+        comp_num_style = ParagraphStyle(name="CompNum", fontName="Helvetica", fontSize=7, leading=8, textColor=colors.HexColor('#2C3E50'), alignment=1)
 
-                clean_df = df.head(15).fillna("-")
-                
-                headers = [Paragraph(str(col), cell_hdr_style) for col in clean_df.columns]
-                table_data = [headers]
+        comp_table_data = [[
+            Paragraph("Metric Name", comp_hdr_style),
+            Paragraph("Yesterday", comp_hdr_style),
+            Paragraph("Today", comp_hdr_style),
+            Paragraph("Variance (Difference)", comp_hdr_style)
+        ]]
 
-                for _, row in clean_df.iterrows():
-                    row_data = [Paragraph(str(val), cell_body_style) for val in row.values]
-                    table_data.append(row_data)
+        for _, row in df_comp.iterrows():
+            comp_table_data.append([
+                Paragraph(str(row["Metric Name"]), comp_body_style),
+                Paragraph(f"{row['Yesterday']:,.2f}".rstrip('0').rstrip('.'), comp_num_style),
+                Paragraph(f"{row['Today']:,.2f}".rstrip('0').rstrip('.'), comp_num_style),
+                Paragraph(f"{row['Variance (Difference)']:,.2f}".rstrip('0').rstrip('.'), comp_num_style)
+            ])
 
-                num_cols = len(clean_df.columns)
-                col_width = 812 / num_cols
+        comp_table = Table(comp_table_data, colWidths=[250, 180, 180, 202])
+        comp_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F4E78')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#BDC3C7')),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(comp_table)
+        story.append(Spacer(1, 12))
 
-                pdf_table = Table(table_data, colWidths=[col_width] * num_cols)
-                pdf_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),
-                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                    ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor('#BDC3C7')),
-                    ('TOPPADDING', (0, 0), (-1, -1), 3),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-                    ('LEFTPADDING', (0, 0), (-1, -1), 2),
-                    ('RIGHTPADDING', (0, 0), (-1, -1), 2),
-                ]))
-                story.append(pdf_table)
-                story.append(Spacer(1, 10))
-
-    # 2. ADD KPI SUMMARY CARDS BEFORE GRAPHS
-    if kpi_data:
+    # 2. ADD SINGLE-DAY KPI CARDS (IF SINGLE-DAY VIEW)
+    elif kpi_data:
         story.append(Paragraph("Key Logistics Performance Indicators", subtitle_style))
         story.append(Spacer(1, 6))
 
@@ -274,19 +265,85 @@ def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None):
             ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
         ]))
         story.append(chart_table)
+        story.append(Spacer(1, 10))
+
+    # 4. ADD DATA TABLES
+    for file_label, excel_data in excel_data_dict.items():
+        story.append(Paragraph(f"Data Set Source: {file_label}", subtitle_style))
+        story.append(Spacer(1, 8))
+
+        for sheet_name in ["HR AND ADMIN", "LOGISTICS AND DISPATCH"]:
+            if sheet_name in excel_data:
+                df = excel_data[sheet_name]
+                story.append(Paragraph(f"Module: {sheet_name}", heading_style))
+                story.append(Spacer(1, 4))
+
+                clean_df = df.head(15).fillna("-")
+                headers = [Paragraph(str(col), cell_hdr_style) for col in clean_df.columns]
+                table_data = [headers]
+
+                for _, row in clean_df.iterrows():
+                    row_data = [Paragraph(str(val), cell_body_style) for val in row.values]
+                    table_data.append(row_data)
+
+                num_cols = len(clean_df.columns)
+                col_width = 812 / num_cols
+
+                pdf_table = Table(table_data, colWidths=[col_width] * num_cols)
+                pdf_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor('#BDC3C7')),
+                    ('TOPPADDING', (0, 0), (-1, -1), 3),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 2),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+                ]))
+                story.append(pdf_table)
+                story.append(Spacer(1, 10))
 
     doc.build(story)
     buffer.seek(0)
     return buffer
 
-def generate_pdf_chart_bytes(df_log):
-    """Generates graph images using Matplotlib with direct data labels for PDF embedding."""
+def generate_pdf_chart_bytes(df_log, df_comp=None):
+    """Generates graph images using Matplotlib for PDF embedding."""
     chart_bytes_list = []
+
+    # 1. Comparison Bar Chart (If df_comp is provided)
+    if df_comp is not None and not df_comp.empty:
+        import numpy as np
+        fig_c, ax_c = plt.subplots(figsize=(8, 3.8))
+        
+        metrics = df_comp['Metric Name'].tolist()
+        yesterday_vals = df_comp['Yesterday'].tolist()
+        today_vals = df_comp['Today'].tolist()
+        
+        x = np.arange(len(metrics))
+        width = 0.35
+        
+        bars1 = ax_c.bar(x - width/2, yesterday_vals, width, label='Yesterday', color='#AB63FA')
+        bars2 = ax_c.bar(x + width/2, today_vals, width, label='Today', color='#00CC96')
+        
+        ax_c.bar_label(bars1, fmt='%.2f', padding=2, fontsize=5)
+        ax_c.bar_label(bars2, fmt='%.2f', padding=2, fontsize=5)
+        
+        ax_c.set_title("Logistics KPI Comparison", fontsize=9, fontweight='bold')
+        ax_c.set_xticks(x)
+        ax_c.set_xticklabels(metrics, rotation=25, ha='right', fontsize=6)
+        ax_c.legend(fontsize=7)
+        plt.tight_layout()
+        
+        buf_c = io.BytesIO()
+        plt.savefig(buf_c, format='png', dpi=150)
+        buf_c.seek(0)
+        chart_bytes_list.append(buf_c.getvalue())
+        plt.close(fig_c)
     
-    if "PARTY NAME (CUSTOMER)" not in df_log.columns:
+    if df_log is None or "PARTY NAME (CUSTOMER)" not in df_log.columns:
         return chart_bytes_list
 
-    # 1. Bar Chart: Total Quantity per Customer
+    # 2. Bar Chart: Total Quantity per Customer
     if "QTY_NUM" in df_log.columns:
         fig1, ax1 = plt.subplots(figsize=(7, 3.5))
         party_qty = df_log.groupby("PARTY NAME (CUSTOMER)")["QTY_NUM"].sum().reset_index()
@@ -305,7 +362,7 @@ def generate_pdf_chart_bytes(df_log):
         chart_bytes_list.append(buf1.getvalue())
         plt.close(fig1)
 
-    # 2. Bar Chart: Total Loading Time per Customer
+    # 3. Bar Chart: Total Loading Time per Customer
     if "LOADING_NUM" in df_log.columns:
         fig2, ax2 = plt.subplots(figsize=(7, 3.5))
         party_load = df_log.groupby("PARTY NAME (CUSTOMER)")["LOADING_NUM"].sum().reset_index()
@@ -323,38 +380,6 @@ def generate_pdf_chart_bytes(df_log):
         buf2.seek(0)
         chart_bytes_list.append(buf2.getvalue())
         plt.close(fig2)
-
-    # 3. Bar Chart: Unique Invoice Counts per Customer (Multi-Invoice Highlighted)
-    if "INVOICE NO." in df_log.columns:
-        fig3, ax3 = plt.subplots(figsize=(7, 3.5))
-        
-        party_inv_counts = {}
-        for party, group in df_log.groupby("PARTY NAME (CUSTOMER)"):
-            inv_set = set()
-            for inv in group["INVOICE NO."].dropna().astype(str):
-                parts = [p.strip() for p in inv.split('/') if p.strip()]
-                inv_set.update(parts)
-            if inv_set:
-                party_inv_counts[party] = len(inv_set)
-                
-        inv_df = pd.DataFrame(list(party_inv_counts.items()), columns=["PARTY NAME (CUSTOMER)", "Invoice Count"])
-        inv_df = inv_df.sort_values(by="Invoice Count", ascending=False)
-
-        bar_colors = ['#d9534f' if count > 1 else '#2b5c8f' for count in inv_df["Invoice Count"]]
-        
-        bars3 = ax3.bar(inv_df["PARTY NAME (CUSTOMER)"], inv_df["Invoice Count"], color=bar_colors)
-        ax3.bar_label(bars3, fmt='%d', padding=3, fontsize=7, fontweight='bold')
-        ax3.set_title("No. of Unique Invoices per Customer (Actual Count)", fontsize=9, fontweight='bold')
-        ax3.set_ylabel("Invoice Count", fontsize=8)
-        ax3.set_yticks(range(0, max(inv_df["Invoice Count"]) + 2))
-        plt.xticks(rotation=45, ha='right', fontsize=6)
-        plt.tight_layout()
-        
-        buf3 = io.BytesIO()
-        plt.savefig(buf3, format='png', dpi=150)
-        buf3.seek(0)
-        chart_bytes_list.append(buf3.getvalue())
-        plt.close(fig3)
 
     return chart_bytes_list
 
@@ -400,7 +425,6 @@ if report_mode == "Single Day View":
             df_log_prep = excel_today["LOGISTICS AND DISPATCH"]
             kpis_today = calculate_logistics_kpis(df_log_prep)
             
-            # Interactive Streamlit Plotly Charts (with Data Labels)
             if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "QTY" in df_log_prep.columns:
                 fig1 = px.bar(
                     df_log_prep, 
@@ -427,71 +451,36 @@ if report_mode == "Single Day View":
                 fig2.update_traces(textposition='outside')
                 single_day_figs.append(fig2)
 
-            if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "INVOICE NO." in df_log_prep.columns:
-                party_inv_counts = {}
-                for party, group in df_log_prep.groupby("PARTY NAME (CUSTOMER)"):
-                    inv_set = set()
-                    for inv in group["INVOICE NO."].dropna().astype(str):
-                        parts = [p.strip() for p in inv.split('/') if p.strip()]
-                        inv_set.update(parts)
-                    if inv_set:
-                        party_inv_counts[party] = len(inv_set)
-                        
-                inv_df = pd.DataFrame(list(party_inv_counts.items()), columns=["PARTY NAME (CUSTOMER)", "Invoice Count"])
-                inv_df = inv_df.sort_values(by="Invoice Count", ascending=False)
-                
-                fig3 = px.bar(
-                    inv_df,
-                    x="PARTY NAME (CUSTOMER)",
-                    y="Invoice Count",
-                    text="Invoice Count",
-                    title="No. of Unique Invoices per Customer (Actual Count)",
-                    color="Invoice Count",
-                    color_continuous_scale=["#2b5c8f", "#d9534f"]
-                )
-                fig3.update_traces(textposition='outside')
-                single_day_figs.append(fig3)
-
             pdf_chart_bytes = generate_pdf_chart_bytes(df_log_prep)
 
         tab_hr, tab_log = st.tabs(["HR AND ADMIN", "LOGISTICS AND DISPATCH"])
         
-        # 1. HR AND ADMIN SHEET
         with tab_hr:
             st.header("HR AND ADMIN")
             if "HR AND ADMIN" in excel_today:
                 df_hr = excel_today["HR AND ADMIN"]
-                if len(df_hr.columns) >= 3:
-                    st.info(f"Dynamic 3rd Column Detected: **{df_hr.columns[2]}**")
                 st.dataframe(df_hr, use_container_width=True)
             else:
                 st.warning("Sheet 'HR AND ADMIN' not found in uploaded file.")
                 
-        # 2. LOGISTICS AND DISPATCH SHEET
         with tab_log:
             st.header("LOGISTICS AND DISPATCH")
             if "LOGISTICS AND DISPATCH" in excel_today:
                 df_log = excel_today["LOGISTICS AND DISPATCH"]
-                
                 st.subheader("📌 Key Logistics Performance Indicators")
                 display_kpis_safely(kpis_today)
-                
                 st.markdown("---")
                 st.dataframe(df_log, use_container_width=True)
-                
                 st.markdown("---")
                 st.subheader("📊 Visual Analytics")
                 if len(single_day_figs) > 0:
-                    g1, g2, g3 = st.columns(3)
+                    g1, g2 = st.columns(2)
                     with g1:
                         if len(single_day_figs) > 0:
                             st.plotly_chart(single_day_figs[0], use_container_width=True)
                     with g2:
                         if len(single_day_figs) > 1:
                             st.plotly_chart(single_day_figs[1], use_container_width=True)
-                    with g3:
-                        if len(single_day_figs) > 2:
-                            st.plotly_chart(single_day_figs[2], use_container_width=True)
             else:
                 st.warning("Sheet 'LOGISTICS AND DISPATCH' not found in uploaded file.")
 
@@ -505,7 +494,7 @@ if report_mode == "Single Day View":
 else:
     if excel_yesterday and excel_today:
         tab_hr, tab_log = st.tabs(["HR AND ADMIN COMPARISON", "LOGISTICS COMPARISON"])
-        kpis_t = {}
+        df_comp = pd.DataFrame()
         
         with tab_hr:
             st.header("HR AND ADMIN — Side-by-Side Comparison")
@@ -534,7 +523,6 @@ else:
                 st.subheader("📈 KPI Variance Summary")
                 comp_rows = []
                 
-                # Order metrics intentionally to match dashboard display
                 metric_order = [
                     "Average Loading Time / Vehicle (Hrs)",
                     "Total Loading Time (Hrs)",
@@ -565,7 +553,6 @@ else:
                 df_comp = pd.DataFrame(comp_rows)
                 st.dataframe(df_comp, use_container_width=True)
                 
-                # Format comparison values for outside text labels
                 yest_labels = [f"{val:,.2f}".rstrip('0').rstrip('.') if isinstance(val, float) else str(val) for val in df_comp['Yesterday']]
                 tod_labels = [f"{val:,.2f}".rstrip('0').rstrip('.') if isinstance(val, float) else str(val) for val in df_comp['Today']]
 
@@ -607,14 +594,16 @@ else:
                     st.subheader("📅 Today's Raw Data")
                     st.dataframe(df_log_t, use_container_width=True)
 
-        comp_pdf_bytes = []
-        if "LOGISTICS AND DISPATCH" in excel_today:
-            comp_pdf_bytes = generate_pdf_chart_bytes(excel_today["LOGISTICS AND DISPATCH"])
+        comp_pdf_bytes = generate_pdf_chart_bytes(excel_today.get("LOGISTICS AND DISPATCH"), df_comp=df_comp)
 
-        pdf_buf = generate_pdf_report({
-            f"Yesterday ({file_yesterday.name})": excel_yesterday,
-            f"Today ({file_today.name})": excel_today
-        }, chart_images=comp_pdf_bytes, kpi_data=kpis_t)
+        pdf_buf = generate_pdf_report(
+            {
+                f"Yesterday ({file_yesterday.name})": excel_yesterday,
+                f"Today ({file_today.name})": excel_today
+            }, 
+            chart_images=comp_pdf_bytes, 
+            df_comp=df_comp
+        )
         st.sidebar.download_button("📥 Download Comparative PDF Report", pdf_buf, "Comparative_Audit_Report.pdf", "application/pdf")
     else:
         st.info("Please upload both Yesterday's and Today's Excel files to view comparison metrics.")
