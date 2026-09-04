@@ -60,11 +60,9 @@ def parse_loading_time(val):
     
     val_str = str(val).upper().replace("HRS", "").replace("MIN.", "").strip()
     
-    # Strictly ignore standalone OTO entries
     if val_str == "OTO":
         return 0.0
     
-    # If OTO/ is present, take the portion after OTO/
     if "OTO/" in val_str:
         val_str = val_str.split("OTO/")[1].strip()
         
@@ -507,7 +505,6 @@ if report_mode == "Single Day View":
 else:
     if excel_yesterday and excel_today:
         tab_hr, tab_log = st.tabs(["HR AND ADMIN COMPARISON", "LOGISTICS COMPARISON"])
-        comp_figs = []
         kpis_t = {}
         
         with tab_hr:
@@ -536,7 +533,23 @@ else:
                 
                 st.subheader("📈 KPI Variance Summary")
                 comp_rows = []
-                all_keys = set(kpis_y.keys()).union(set(kpis_t.keys()))
+                
+                # Order metrics intentionally to match dashboard display
+                metric_order = [
+                    "Average Loading Time / Vehicle (Hrs)",
+                    "Total Loading Time (Hrs)",
+                    "Unique Transports Count",
+                    "Unique Vehicles Count",
+                    "Unique Parties Count",
+                    "Total Quantity (MT)",
+                    "Unique Invoices Count",
+                    "Total Freight (₹)"
+                ]
+                
+                all_keys = [m for m in metric_order if m in kpis_y or m in kpis_t]
+                for k in set(list(kpis_y.keys()) + list(kpis_t.keys())):
+                    if k not in all_keys:
+                        all_keys.append(k)
                 
                 for k in all_keys:
                     val_y = kpis_y.get(k, 0.0)
@@ -552,11 +565,38 @@ else:
                 df_comp = pd.DataFrame(comp_rows)
                 st.dataframe(df_comp, use_container_width=True)
                 
+                # Format comparison values for outside text labels
+                yest_labels = [f"{val:,.2f}".rstrip('0').rstrip('.') if isinstance(val, float) else str(val) for val in df_comp['Yesterday']]
+                tod_labels = [f"{val:,.2f}".rstrip('0').rstrip('.') if isinstance(val, float) else str(val) for val in df_comp['Today']]
+
                 fig_comp = go.Figure(data=[
-                    go.Bar(name='Yesterday', x=df_comp['Metric Name'], y=df_comp['Yesterday'], text=df_comp['Yesterday'], textposition='outside', marker_color='#AB63FA'),
-                    go.Bar(name='Today', x=df_comp['Metric Name'], y=df_comp['Today'], text=df_comp['Today'], textposition='outside', marker_color='#00CC96')
+                    go.Bar(
+                        name='Yesterday', 
+                        x=df_comp['Metric Name'], 
+                        y=df_comp['Yesterday'], 
+                        text=yest_labels, 
+                        textposition='outside', 
+                        marker_color='#AB63FA'
+                    ),
+                    go.Bar(
+                        name='Today', 
+                        x=df_comp['Metric Name'], 
+                        y=df_comp['Today'], 
+                        text=tod_labels, 
+                        textposition='outside', 
+                        marker_color='#00CC96'
+                    )
                 ])
-                fig_comp.update_layout(barmode='group', title="Logistics KPI Comparison")
+                
+                fig_comp.update_layout(
+                    title="Logistics KPI Comparison",
+                    barmode='group',
+                    xaxis_tickangle=-30,
+                    margin=dict(t=50, b=100, l=40, r=40),
+                    legend=dict(x=0.85, y=0.95),
+                    template="plotly_white"
+                )
+                
                 st.plotly_chart(fig_comp, use_container_width=True)
                 
                 c1, c2 = st.columns(2)
