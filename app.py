@@ -29,7 +29,7 @@ def clean_column_names(df):
     return df
 
 def parse_slash_separated_qty(val):
-    """Splits values separated by '/' (e.g., '10/20.5/5' or '15') and returns their sum."""
+    """Splits values separated by '/' (e.g., '6.3/21.58' or '11.04/3.610') and returns their sum."""
     if pd.isna(val):
         return 0.0
     val_str = str(val).strip()
@@ -82,7 +82,9 @@ def calculate_logistics_kpis(df):
             freight_str = str(row["FREIGHT (IF)"]).upper().strip()
             qty = float(row.get("QTY_NUM", 0.0))
             
-            if "PMT" in freight_str:
+            if freight_str in ["NAN", "NONE", "-", ""]:
+                continue
+            elif "PMT" in freight_str:
                 clean_num = ''.join(c for c in freight_str.replace("PMT", "").replace("/", "") if c.isdigit() or c == '.')
                 try:
                     total_freight += float(clean_num) * qty
@@ -94,15 +96,19 @@ def calculate_logistics_kpis(df):
                 except ValueError:
                     pass
         kpis["Total Freight (₹)"] = total_freight
+    else:
+        kpis["Total Freight (₹)"] = 0.0
 
     if "LOADING TIME" in df.columns:
-        df["LOADING_NUM"] = pd.to_numeric(df["LOADING TIME"].astype(str).str.replace("HRS", "", case=False).str.strip(), errors='coerce').fillna(0)
+        df["LOADING_NUM"] = pd.to_numeric(df["LOADING TIME"].astype(str).str.replace("HRS", "", case=False).str.replace("MIN.", "", case=False).str.strip(), errors='coerce').fillna(0)
         total_loading = df["LOADING_NUM"].sum()
         kpis["Total Loading Time (Hrs)"] = total_loading
         
         veh_count = kpis.get("Unique Vehicles Count", 0)
         if veh_count > 0:
             kpis["Average Loading Time / Vehicle (Hrs)"] = total_loading / veh_count
+        else:
+            kpis["Average Loading Time / Vehicle (Hrs)"] = 0.0
 
     return kpis
 
@@ -117,8 +123,8 @@ def display_kpis_safely(kpis):
                 val_str = f"{v:,.2f}" if isinstance(v, float) else str(v)
                 cols[idx].metric(label=k, value=val_str)
 
-def generate_pdf_report(excel_data_dict, chart_images=None):
-    """Generates landscape PDF report with auto-wrapped tables and embedded static graph images."""
+def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None):
+    """Generates landscape PDF report with auto-wrapped tables, KPI summary cards, and embedded static graphs."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, 
@@ -137,6 +143,9 @@ def generate_pdf_report(excel_data_dict, chart_images=None):
     
     cell_hdr_style = ParagraphStyle(name="CellHeader", fontName="Helvetica-Bold", fontSize=6, leading=7, textColor=colors.white, alignment=1)
     cell_body_style = ParagraphStyle(name="CellBody", fontName="Helvetica", fontSize=6, leading=7, textColor=colors.HexColor('#2C3E50'), alignment=0)
+
+    kpi_title_style = ParagraphStyle(name="KPITitle", fontName="Helvetica-Bold", fontSize=7, leading=8, textColor=colors.HexColor('#566573'), alignment=1)
+    kpi_val_style = ParagraphStyle(name="KPIVal", fontName="Helvetica-Bold", fontSize=12, leading=14, textColor=colors.HexColor('#1A252F'), alignment=1)
 
     story.append(Paragraph("OPERATIONS & AUDIT COMPREHENSIVE REPORT", title_style))
     story.append(Spacer(1, 10))
@@ -177,9 +186,40 @@ def generate_pdf_report(excel_data_dict, chart_images=None):
                 story.append(pdf_table)
                 story.append(Spacer(1, 10))
 
-    # 2. EMBED CHARTS INTO PDF
+    # 2. ADD KPI SUMMARY CARDS BEFORE GRAPHS
+    if kpi_data:
+        story.append(Paragraph("Key Logistics Performance Indicators", subtitle_style))
+        story.append(Spacer(1, 6))
+
+        kpi_list = list(kpi_data.items())
+        # Split into two rows of 4 metrics each
+        row1_kpis = kpi_list[:4]
+        row2_kpis = kpi_list[4:8]
+
+        kpi_table_data = [
+            [Paragraph(k, kpi_title_style) for k, _ in row1_kpis],
+            [Paragraph(f"{v:,.2f}" if isinstance(v, float) else str(v), kpi_val_style) for _, v in row1_kpis]
+        ]
+
+        if row2_kpis:
+            kpi_table_data.append([Paragraph(k, kpi_title_style) for k, _ in row2_kpis])
+            kpi_table_data.append([Paragraph(f"{v:,.2f}" if isinstance(v, float) else str(v), kpi_val_style) for _, v in row2_kpis])
+
+        num_kpi_cols = len(row1_kpis)
+        kpi_card_table = Table(kpi_table_data, colWidths=[812 / num_kpi_cols] * num_kpi_cols)
+        kpi_card_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#F8F9F9')),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E5E7E9')),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(kpi_card_table)
+        story.append(Spacer(1, 12))
+
+    # 3. EMBED VISUAL CHARTS
     if chart_images:
-        story.append(Spacer(1, 5))
         story.append(Paragraph("Visual Performance Charts", subtitle_style))
         story.append(Spacer(1, 8))
         
@@ -313,10 +353,11 @@ if report_mode == "Single Day View":
     if excel_today:
         single_day_figs = []
         pdf_chart_bytes = []
+        kpis_today = {}
 
         if "LOGISTICS AND DISPATCH" in excel_today:
             df_log_prep = excel_today["LOGISTICS AND DISPATCH"]
-            calculate_logistics_kpis(df_log_prep)
+            kpis_today = calculate_logistics_kpis(df_log_prep)
             
             # Interactive Streamlit Plotly Charts (with Data Labels)
             if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "QTY" in df_log_prep.columns:
@@ -357,7 +398,6 @@ if report_mode == "Single Day View":
                 fig3.update_traces(textinfo='value+percent', textposition='inside')
                 single_day_figs.append(fig3)
 
-            # Generate robust PDF static graphs
             pdf_chart_bytes = generate_pdf_chart_bytes(df_log_prep)
 
         tab_hr, tab_log = st.tabs(["HR AND ADMIN", "LOGISTICS AND DISPATCH"])
@@ -380,8 +420,7 @@ if report_mode == "Single Day View":
                 df_log = excel_today["LOGISTICS AND DISPATCH"]
                 
                 st.subheader("📌 Key Logistics Performance Indicators")
-                kpis = calculate_logistics_kpis(df_log)
-                display_kpis_safely(kpis)
+                display_kpis_safely(kpis_today)
                 
                 st.markdown("---")
                 st.dataframe(df_log, use_container_width=True)
@@ -402,8 +441,8 @@ if report_mode == "Single Day View":
             else:
                 st.warning("Sheet 'LOGISTICS AND DISPATCH' not found in uploaded file.")
 
-        pdf_buf = generate_pdf_report({"Today": excel_today}, chart_images=pdf_chart_bytes)
-        st.sidebar.download_button("📥 Download PDF Report (With Graphs & Data Labels)", pdf_buf, "Daily_Audit_Report.pdf", "application/pdf")
+        pdf_buf = generate_pdf_report({"Today": excel_today}, chart_images=pdf_chart_bytes, kpi_data=kpis_today)
+        st.sidebar.download_button("📥 Download PDF Report (With KPIs & Graphs)", pdf_buf, "Daily_Audit_Report.pdf", "application/pdf")
 
     else:
         st.info("Please upload an Excel file to generate the single-day report.")
@@ -413,6 +452,7 @@ else:
     if excel_yesterday and excel_today:
         tab_hr, tab_log = st.tabs(["HR AND ADMIN COMPARISON", "LOGISTICS COMPARISON"])
         comp_figs = []
+        kpis_t = {}
         
         with tab_hr:
             st.header("HR AND ADMIN — Side-by-Side Comparison")
@@ -478,7 +518,7 @@ else:
         pdf_buf = generate_pdf_report({
             f"Yesterday ({file_yesterday.name})": excel_yesterday,
             f"Today ({file_today.name})": excel_today
-        }, chart_images=comp_pdf_bytes)
+        }, chart_images=comp_pdf_bytes, kpi_data=kpis_t)
         st.sidebar.download_button("📥 Download Comparative PDF Report", pdf_buf, "Comparative_Audit_Report.pdf", "application/pdf")
     else:
         st.info("Please upload both Yesterday's and Today's Excel files to view comparison metrics.")
