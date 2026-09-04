@@ -192,7 +192,6 @@ def generate_pdf_report(excel_data_dict, chart_images=None, kpi_data=None):
         story.append(Spacer(1, 6))
 
         kpi_list = list(kpi_data.items())
-        # Split into two rows of 4 metrics each
         row1_kpis = kpi_list[:4]
         row2_kpis = kpi_list[4:8]
 
@@ -292,21 +291,30 @@ def generate_pdf_chart_bytes(df_log):
         chart_bytes_list.append(buf2.getvalue())
         plt.close(fig2)
 
-    # 3. Pie Chart: Unique Invoices per Customer
+    # 3. Bar Chart: Unique Invoice Counts per Customer (Multi-Invoice Highlighted)
     if "INVOICE NO." in df_log.columns:
         fig3, ax3 = plt.subplots(figsize=(7, 3.5))
-        inv_df = df_log.groupby("PARTY NAME (CUSTOMER)")["INVOICE NO."].nunique().reset_index()
-        inv_df.columns = ["PARTY NAME (CUSTOMER)", "Invoice Count"]
-        inv_df = inv_df[inv_df["Invoice Count"] > 0]
         
-        wedges, texts, autotexts = ax3.pie(
-            inv_df["Invoice Count"], 
-            labels=inv_df["PARTY NAME (CUSTOMER)"], 
-            autopct='%1.0f', 
-            textprops=dict(fontsize=6),
-            startangle=140
-        )
-        ax3.set_title("No. of Unique Invoices per Customer", fontsize=9, fontweight='bold')
+        party_inv_counts = {}
+        for party, group in df_log.groupby("PARTY NAME (CUSTOMER)"):
+            inv_set = set()
+            for inv in group["INVOICE NO."].dropna().astype(str):
+                parts = [p.strip() for p in inv.split('/') if p.strip()]
+                inv_set.update(parts)
+            if inv_set:
+                party_inv_counts[party] = len(inv_set)
+                
+        inv_df = pd.DataFrame(list(party_inv_counts.items()), columns=["PARTY NAME (CUSTOMER)", "Invoice Count"])
+        inv_df = inv_df.sort_values(by="Invoice Count", ascending=False)
+
+        bar_colors = ['#d9534f' if count > 1 else '#2b5c8f' for count in inv_df["Invoice Count"]]
+        
+        bars3 = ax3.bar(inv_df["PARTY NAME (CUSTOMER)"], inv_df["Invoice Count"], color=bar_colors)
+        ax3.bar_label(bars3, fmt='%d', padding=3, fontsize=7, fontweight='bold')
+        ax3.set_title("No. of Unique Invoices per Customer (Actual Count)", fontsize=9, fontweight='bold')
+        ax3.set_ylabel("Invoice Count", fontsize=8)
+        ax3.set_yticks(range(0, max(inv_df["Invoice Count"]) + 2))
+        plt.xticks(rotation=45, ha='right', fontsize=6)
         plt.tight_layout()
         
         buf3 = io.BytesIO()
@@ -387,15 +395,28 @@ if report_mode == "Single Day View":
                 single_day_figs.append(fig2)
 
             if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "INVOICE NO." in df_log_prep.columns:
-                inv_df = df_log_prep.groupby("PARTY NAME (CUSTOMER)")["INVOICE NO."].nunique().reset_index()
-                inv_df.columns = ["PARTY NAME (CUSTOMER)", "Invoice Count"]
-                fig3 = px.pie(
-                    inv_df, 
-                    names="PARTY NAME (CUSTOMER)", 
-                    values="Invoice Count", 
-                    title="No. of Unique Invoices per Customer"
+                party_inv_counts = {}
+                for party, group in df_log_prep.groupby("PARTY NAME (CUSTOMER)"):
+                    inv_set = set()
+                    for inv in group["INVOICE NO."].dropna().astype(str):
+                        parts = [p.strip() for p in inv.split('/') if p.strip()]
+                        inv_set.update(parts)
+                    if inv_set:
+                        party_inv_counts[party] = len(inv_set)
+                        
+                inv_df = pd.DataFrame(list(party_inv_counts.items()), columns=["PARTY NAME (CUSTOMER)", "Invoice Count"])
+                inv_df = inv_df.sort_values(by="Invoice Count", ascending=False)
+                
+                fig3 = px.bar(
+                    inv_df,
+                    x="PARTY NAME (CUSTOMER)",
+                    y="Invoice Count",
+                    text="Invoice Count",
+                    title="No. of Unique Invoices per Customer (Actual Count)",
+                    color="Invoice Count",
+                    color_continuous_scale=["#2b5c8f", "#d9534f"]
                 )
-                fig3.update_traces(textinfo='value+percent', textposition='inside')
+                fig3.update_traces(textposition='outside')
                 single_day_figs.append(fig3)
 
             pdf_chart_bytes = generate_pdf_chart_bytes(df_log_prep)
