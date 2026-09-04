@@ -1,260 +1,156 @@
-import io
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.platypus import HRFlowable, Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 
+# --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Multi-Department Operational Report Generator",
-    page_icon="📄",
-    layout="centered",
+    page_title="Daily Godown Dispatch & Audit Dashboard",
+    page_icon="📊",
+    layout="wide"
 )
 
-st.title("📦 Daily Stock & Dispatch PDF Generator")
-st.write(
-    "Upload your daily operational Excel workbook containing the 9 target"
-    " sheets to directly generate and download the consolidated PDF report."
+# --- TITLE & SUBTITLE ---
+st.title("DAILY GODOWN DISPATCH & STOCK MOVEMENTS REPORT")
+st.caption("Consolidated report covering dispatches, delayed yesterday vehicle dispatches, and itemized stock balances.")
+
+# --- SIDEBAR CONTROLS ---
+st.sidebar.header("Filter Options")
+report_type = st.sidebar.radio(
+    "Select View Mode",
+    ["Daily Godown Stock Report", "Dynamic Date-Wise Audit Comparison"]
 )
 
-uploaded_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
+if report_type == "Daily Godown Stock Report":
+    # -------------------------------------------------------------------------
+    # 1. SALESPERSON-WISE DISPATCH SUMMARY
+    # -------------------------------------------------------------------------
+    st.header("1. Salesperson-Wise Dispatch Summary")
+    
+    sales_summary_data = [
+        {"Sales Person": "AKASH JI", "Sheet/Date": "GD 19-09-2026", "Total Vehicles": 2, "Parties Served": "STEEL TMT HUB INDIA, NILESH SHAH (RAJDEEP STEEL PRODUCTS/SHIP TO RAIPUR)", "Adjustment/Remarks": "NO ADJUSTMENT"},
+        {"Sales Person": "AKASH JI", "Sheet/Date": "GD 20-09-2026", "Total Vehicles": 5, "Parties Served": "JMD TRADING COMPANY, OM INDUSTRIES TILDA, SG MART, RADIANT METAL ALLOYS, VRIDHI CONSTRUCTION", "Adjustment/Remarks": "No adjustment"},
+        {"Sales Person": "DEEPANKAR JI", "Sheet/Date": "GD 19-09-2026", "Total Vehicles": 4, "Parties Served": "LOHA LIVE PLATFORM, HARI AGRAWAL (RAMETI ENTERPRISES), BANKE TRADECOM SERVICE, VANKAL CABLES", "Adjustment/Remarks": "NO ADJUSTMENT"},
+        {"Sales Person": "DEEPANKAR JI", "Sheet/Date": "GD 20-09-2026", "Total Vehicles": 5, "Parties Served": "OFB TECH LIMITED MAHARASHTRA, DP BANSAL COMMERCIAL COMPANY, ANAND STEEL SAGAR, AGRASEN ISPAT, SHREEJI STEEL SURAT", "Adjustment/Remarks": "yesterday vehicle dispatch 20.08.2026, No adjustment"},
+        {"Sales Person": "DIPESH JI", "Sheet/Date": "GD 19-09-2026", "Total Vehicles": 2, "Parties Served": "ISPAT SALES (A UNIT OF AGS ISPAT), VISHWAGEETA ISPAT", "Adjustment/Remarks": "NO ADJUSTMENT"},
+        {"Sales Person": "DIPESH JI", "Sheet/Date": "GD 20-09-2026", "Total Vehicles": 4, "Parties Served": "ARYA ENERGY LTD ANUPPUR, VISHWAGEETA ISPAT, ASHIRWAD IRON & POWER PVT LTD", "Adjustment/Remarks": "No adjustment"},
+        {"Sales Person": "SONU JI", "Sheet/Date": "GD 19-09-2026", "Total Vehicles": 10, "Parties Served": "ESSEL PROJECTS BHILAI, HI-TECH METALLICS, LAXMIKRIPA STEEL POWER, RR INDUSTRIES, BOLD STEEL SUPPLIER, ARUNSTEEL, AGRAWAL STEEL, JESANI SALES", "Adjustment/Remarks": "NO ADJUSTMENT"},
+        {"Sales Person": "SONU JI", "Sheet/Date": "GD 20-09-2026", "Total Vehicles": 7, "Parties Served": "RELIABLE STEEL MONGERS, DIAMOND FURNITURE, ARUN STEEL, SOURABH ROLLING MILL, ESSEL PROJECTS, KUNAL OZA", "Adjustment/Remarks": "yesterday vehicle dispatch 20.08.2026, No adjustment, Pending for dispatch"},
+        {"Sales Person": "VINITA JI", "Sheet/Date": "GD 19-09-2026", "Total Vehicles": 2, "Parties Served": "SARDA TRADERS, JAHIR AGRO INDUSTRIES", "Adjustment/Remarks": "NO ADJUSTMENT"}
+    ]
+    df_sales = pd.DataFrame(sales_summary_data)
+    st.dataframe(df_sales, use_container_width=True)
 
+    # -------------------------------------------------------------------------
+    # 2. DELAYED YESTERDAY VEHICLES DISPATCHED TODAY
+    # -------------------------------------------------------------------------
+    st.header("2. Delayed Yesterday Vehicles Dispatched Today")
+    
+    delayed_data = [
+        {"Sheet/Date": "GD 20-09-2026", "SR No": 1, "Vehicle No": "NL01AH3668", "Party Name": "OFB TECH LIMITED MAHARASHTRA", "Sales Person": "DEEPANKAR JI", "Dispatch Remark": "yesterday vehicle dispatch 20.08.2026"},
+        {"Sheet/Date": "GD 20-09-2026", "SR No": 2, "Vehicle No": "CG07CA9013", "Party Name": "DP BANSAL COMMERCIAL COMPANY", "Sales Person": "DEEPANKAR JI", "Dispatch Remark": "yesterday vehicle dispatch 20.08.2026"},
+        {"Sheet/Date": "GD 20-09-2026", "SR No": 3, "Vehicle No": "RJ48GB1023", "Party Name": "RELIABLE STEEL MONGERS PVT LTD", "Sales Person": "SONU JI", "Dispatch Remark": "yesterday vehicle dispatch 20.08.2026"}
+    ]
+    df_delayed = pd.DataFrame(delayed_data)
+    st.dataframe(df_delayed, use_container_width=True)
 
-def build_pdf_report(sheets_data, chart1_bytes, chart2_bytes):
-  buffer = io.BytesIO()
-  doc = SimpleDocTemplate(
-      buffer,
-      pagesize=A4,
-      rightMargin=25,
-      leftMargin=25,
-      topMargin=25,
-      bottomMargin=25,
-  )
-  elements = []
+    # -------------------------------------------------------------------------
+    # 3. GODOWN OVERALL STOCK & PRODUCTION SUMMARY
+    # -------------------------------------------------------------------------
+    st.header("3. Godown Overall Stock & Production Summary (MT)")
+    
+    overall_stock_data = [
+        {"Sheet / Date": "GD 19-09-2026", "Opening Stock (MT)": 3189.14, "Closing Stock (MT)": 4543.22, "Yesterday Production (MT)": 106.21, "Dispatch Stock (MT)": 255.81},
+        {"Sheet / Date": "GD 20-09-2026", "Opening Stock (MT)": 4543.22, "Closing Stock (MT)": 5535.35, "Yesterday Production (MT)": 214.20, "Dispatch Stock (MT)": 328.45}
+    ]
+    df_overall = pd.DataFrame(overall_stock_data)
+    st.dataframe(df_overall, use_container_width=True)
 
-  styles = getSampleStyleSheet()
+    # -------------------------------------------------------------------------
+    # 4. ITEM-WISE STOCK BREAKDOWN
+    # -------------------------------------------------------------------------
+    st.header("4. Item-Wise Stock Breakdown (Opening vs Closing)")
+    
+    item_stock_data = [
+        {"Particulars/Item": "CHQ COIL", "Opening Stock (MT)": 567.19, "Closing Stock (MT)": 538.63, "Variance (MT)": -28.56},
+        {"Particulars/Item": "CHQ PLATE", "Opening Stock (MT)": 237.97, "Closing Stock (MT)": 222.06, "Variance (MT)": -15.91},
+        {"Particulars/Item": "HR COIL", "Opening Stock (MT)": 3576.35, "Closing Stock (MT)": 5557.50, "Variance (MT)": 1981.15},
+        {"Particulars/Item": "HR PLATE", "Opening Stock (MT)": 589.52, "Closing Stock (MT)": 680.33, "Variance (MT)": 90.81},
+        {"Particulars/Item": "HR SHEET", "Opening Stock (MT)": 577.88, "Closing Stock (MT)": 555.03, "Variance (MT)": -22.85},
+        {"Particulars/Item": "HT COIL", "Opening Stock (MT)": 614.05, "Closing Stock (MT)": 950.60, "Variance (MT)": 336.55},
+        {"Particulars/Item": "HT PLATE", "Opening Stock (MT)": 561.92, "Closing Stock (MT)": 561.93, "Variance (MT)": 0.01},
+        {"Particulars/Item": "OT PLATE", "Opening Stock (MT)": 10.60, "Closing Stock (MT)": 10.60, "Variance (MT)": 0.00},
+        {"Particulars/Item": "PM PLATE", "Opening Stock (MT)": 897.75, "Closing Stock (MT)": 902.02, "Variance (MT)": 4.27},
+        {"Particulars/Item": "SCRAP", "Opening Stock (MT)": 30.48, "Closing Stock (MT)": 31.22, "Variance (MT)": 0.74},
+        {"Particulars/Item": "STRUCTURE", "Opening Stock (MT)": 68.64, "Closing Stock (MT)": 68.64, "Variance (MT)": 0.00}
+    ]
+    df_items = pd.DataFrame(item_stock_data)
+    st.dataframe(df_items, use_container_width=True)
 
-  title_style = ParagraphStyle(
-      'DocTitle',
-      parent=styles['Heading1'],
-      fontSize=14,
-      leading=18,
-      alignment=1,
-      textColor=colors.HexColor('#0F172A'),
-  )
-  sub_style = ParagraphStyle(
-      'DocSub',
-      parent=styles['Normal'],
-      fontSize=9,
-      leading=12,
-      alignment=1,
-      textColor=colors.HexColor('#475569'),
-  )
-  sec_style = ParagraphStyle(
-      'SecHeader',
-      parent=styles['Heading2'],
-      fontSize=11,
-      leading=15,
-      textColor=colors.HexColor('#1E293B'),
-  )
-  cell_style = ParagraphStyle(
-      'CellText', parent=styles['Normal'], fontSize=7.5, leading=9.5
-  )
-  header_cell_style = ParagraphStyle(
-      'HeaderCellText',
-      parent=styles['Normal'],
-      fontSize=7.5,
-      leading=9.5,
-      textColor=colors.white,
-      fontName='Helvetica-Bold',
-  )
+    # -------------------------------------------------------------------------
+    # 5. VISUAL ANALYTICS
+    # -------------------------------------------------------------------------
+    st.header("5. Visual Analytics")
+    col1, col2 = st.columns(2)
 
-  # Title Header
-  elements.append(
-      Paragraph(
-          'DAILY GODOWN DISPATCH & STOCK MOVEMENTS REPORT', title_style
-      )
-  )
-  elements.append(
-      Paragraph(
-          'Consolidated report covering dispatches, delayed vehicle dispatches,'
-          ' and multi-department operational balances.',
-          sub_style,
-      )
-  )
-  elements.append(Spacer(1, 10))
-  elements.append(
-      HRFlowable(
-          width='100%',
-          thickness=1,
-          color=colors.HexColor('#CBD5E1'),
-          spaceAfter=12,
-      )
-  )
+    with col1:
+        st.subheader("A. Salesperson-Wise Parties Served")
+        parties_data = {
+            "Sales Person": ["SONU JI", "DEEPANKAR JI", "AKASH JI", "DIPESH JI", "VINITA JI"],
+            "Parties Served": [14, 9, 7, 4, 2]
+        }
+        df_parties = pd.DataFrame(parties_data)
+        fig_parties = px.bar(
+            df_parties, 
+            x="Sales Person", 
+            y="Parties Served", 
+            text="Parties Served",
+            color_discrete_sequence=["#636EFA"]
+        )
+        fig_parties.update_traces(textposition="outside")
+        fig_parties.update_layout(yaxis_range=[0, 16], yaxis_title="Number of Parties Served")
+        st.plotly_chart(fig_parties, use_container_width=True)
 
-  # Helper function to generate clean tables dynamically from any dataframe
-  def make_table(df):
-    if df.empty:
-      return Paragraph('No data recorded for this section.', cell_style)
-
-    table_data = [[
-        Paragraph(str(col), header_cell_style) for col in df.columns
-    ]]
-    for _, row in df.iterrows():
-      table_data.append([
-          Paragraph(str(val) if pd.notna(val) else '', cell_style)
-          for val in row.values
-      ])
-
-    t = Table(table_data, repeatRows=1)
-    t.setStyle(
-        TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#334155')),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
-            (
-                'ROWBACKGROUNDS',
-                (0, 1),
-                (-1, -1),
-                [colors.white, colors.HexColor('#F8FAFC')],
-            ),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-            ('TOPPADDING', (0, 0), (-1, -1), 3),
+    with col2:
+        st.subheader("B. Item Stock Opening vs Closing Comparison")
+        fig_stock = go.Figure(data=[
+            go.Bar(name='Opening Stock (MT)', x=df_items['Particulars/Item'], y=df_items['Opening Stock (MT)'], marker_color='#3366CC'),
+            go.Bar(name='Closing Stock (MT)', x=df_items['Particulars/Item'], y=df_items['Closing Stock (MT)'], marker_color='#109618')
         ])
-    )
-    return t
+        fig_stock.update_layout(barmode='group', yaxis_title="Metric Tons (MT)")
+        st.plotly_chart(fig_stock, use_container_width=True)
 
-  # Section Mapping
-  section_order = [
-      ('Sales Person Wise Dispatch', '1. Sales Person Wise Dispatch Summary'),
-      (
-          'Logistics And Dispatch',
-          '2. Delayed Yesterday Vehicles Dispatched Today',
-      ),
-      ('Stock', '3. Godown Overall Stock & Production Summary (MT)'),
-      ('Purchase Order', '4. Purchase Orders Summary'),
-      ('Purchase Plates', '5. Purchase Plates Summary'),
-      ('Purchase Structure', '6. Purchase Structure Breakdown'),
-      ('Sales And Marketing', '7. Sales & Marketing Overview'),
-      ('HR ANd Admin', '8. HR & Administration Operational Summary'),
-      ('Accounts', '9. Accounts & Financial Summary'),
-  ]
+else:
+    # -------------------------------------------------------------------------
+    # DYNAMIC DATE-WISE AUDIT & OPERATIONAL COMPARISON REPORT
+    # -------------------------------------------------------------------------
+    st.header("Operational Audit Comparison: 31-08-2026 vs 01-09-2026")
+    
+    audit_metrics = [
+        {"Operational/ Cost Metric": "Total Invoices Generated", "31-08-2026": "14 Invoices", "01-09-2026": "22 Invoices", "Operational Variance": "+8 Invoices"},
+        {"Operational/ Cost Metric": "Dispatched Quantity Tonnage", "31-08-2026": "217.86 MT", "01-09-2026": "196.41 MT", "Operational Variance": "-21.45 MT"},
+        {"Operational/ Cost Metric": "Calculated Total Freight Cost", "31-08-2026": "0.00", "01-09-2026": "11,299.50", "Operational Variance": "+11,299.50"},
+        {"Operational/ Cost Metric": "Total Loading Duration Hours", "31-08-2026": "88.33 Hrs", "01-09-2026": "76.42 Hrs", "Operational Variance": "-11.92 Hrs"},
+        {"Operational/ Cost Metric": "Average Loading Time / Vehicle", "31-08-2026": "5.89 Hrs", "01-09-2026": "3.06 Hrs", "Operational Variance": "-2.83 Hrs"},
+        {"Operational/ Cost Metric": "Number of Parties Serviced", "31-08-2026": "15", "01-09-2026": "25", "Operational Variance": "+10 Parties"},
+        {"Operational/ Cost Metric": "Yesterday Pending Orders", "31-08-2026": "2", "01-09-2026": "3", "Operational Variance": "+1 Orders"},
+        {"Operational/ Cost Metric": "Material/Billing Pending", "31-08-2026": "0", "01-09-2026": "0", "Operational Variance": "+0 Orders"}
+    ]
+    st.dataframe(pd.DataFrame(audit_metrics), use_container_width=True)
 
-  for sheet_key, section_title in section_order:
-    if sheet_key in sheets_data:
-      elements.append(Paragraph(section_title, sec_style))
-      elements.append(Spacer(1, 4))
-      elements.append(make_table(sheets_data[sheet_key]))
-      elements.append(Spacer(1, 10))
-
-  # Render Visual Charts
-  if chart1_bytes or chart2_bytes:
-    elements.append(Paragraph('10. Visual Analytics', sec_style))
-    elements.append(Spacer(1, 6))
-
-    if chart1_bytes:
-      elements.append(Image(chart1_bytes, width=540, height=180))
-      elements.append(Spacer(1, 8))
-
-    if chart2_bytes:
-      elements.append(Image(chart2_bytes, width=540, height=200))
-
-  doc.build(elements)
-  buffer.seek(0)
-  return buffer
-
-
-if uploaded_file:
-  try:
-    xls = pd.ExcelFile(uploaded_file)
-    found_sheets = xls.sheet_names
-
-    # Load sheets into dictionary
-    sheets_data = {sheet: pd.read_excel(xls, sheet) for sheet in found_sheets}
-
-    # Chart 1: Salesperson Parties Served
-    chart1_io = None
-    if 'Sales Person Wise Dispatch' in sheets_data:
-      df_sp = sheets_data['Sales Person Wise Dispatch']
-      sp_cols = df_sp.columns
-      sp_col = [c for c in sp_cols if 'person' in c.lower() or 'sales' in c.lower()]
-      party_col = [c for c in sp_cols if 'party' in c.lower() or 'parties' in c.lower()]
-
-      if sp_col and party_col:
-        counts = df_sp.groupby(sp_col[0])[party_col[0]].count()
-        fig1, ax1 = plt.subplots(figsize=(10, 3.5))
-        ax1.bar(counts.index, counts.values, color='#6C63FF', width=0.4)
-        ax1.set_ylabel('Parties Served', fontweight='bold')
-        ax1.set_title(
-            'Salesperson-Wise Served Parties Count', fontweight='bold', pad=12
-        )
-        ax1.grid(axis='y', linestyle='--', alpha=0.5)
-        plt.tight_layout()
-        chart1_io = io.BytesIO()
-        plt.savefig(chart1_io, format='png', dpi=200)
-        plt.close()
-
-    # Chart 2: Item Opening vs Closing Stock
-    chart2_io = None
-    if 'Stock' in sheets_data:
-      df_st = sheets_data['Stock']
-      st_cols = df_st.columns
-      item_col = [c for c in st_cols if 'item' in c.lower() or 'particular' in c.lower()]
-      open_col = [c for c in st_cols if 'open' in c.lower()]
-      close_col = [c for c in st_cols if 'close' in c.lower()]
-
-      if item_col and open_col and close_col:
-        items = df_st[item_col[0]].astype(str)
-        opening = pd.to_numeric(df_st[open_col[0]], errors='coerce').fillna(0)
-        closing = pd.to_numeric(df_st[close_col[0]], errors='coerce').fillna(0)
-
-        x = np.arange(len(items))
-        width = 0.35
-
-        fig2, ax2 = plt.subplots(figsize=(12, 4.5))
-        ax2.bar(
-            x - width / 2,
-            opening,
-            width,
-            label='Opening Stock (MT)',
-            color='#3B82F6',
-        )
-        ax2.bar(
-            x + width / 2,
-            closing,
-            width,
-            label='Closing Stock (MT)',
-            color='#10B981',
-        )
-        ax2.set_ylabel('Metric Tons (MT)', fontweight='bold')
-        ax2.set_title(
-            'Item-Wise Opening vs Closing Stock Balance',
-            fontweight='bold',
-            pad=12,
-        )
-        ax2.set_xticks(x)
-        ax2.set_xticklabels(items, rotation=25, ha='right')
-        ax2.legend()
-        ax2.grid(axis='y', linestyle='--', alpha=0.5)
-        plt.tight_layout()
-        chart2_io = io.BytesIO()
-        plt.savefig(chart2_io, format='png', dpi=200)
-        plt.close()
-
-    # Generate PDF
-    pdf_buffer = build_pdf_report(sheets_data, chart1_io, chart2_io)
-
-    st.success('All sheets mapped and PDF generated successfully!')
-    st.download_button(
-        label='📥 Download Godown Report PDF',
-        data=pdf_buffer,
-        file_name='Daily_Godown_Stock_Report.pdf',
-        mime='application/pdf',
-    )
-
-  except Exception as e:
-    st.error(f'Error reading workbook: {e}')
+    st.subheader("Operational Audit & Freight Variance Comparison Chart")
+    
+    chart_metrics_df = pd.DataFrame([
+        {"Metric": "Dispatched Qty (MT)", "31-08-2026": 217.9, "01-09-2026": 196.4},
+        {"Metric": "Total Invoices Generated", "31-08-2026": 14.0, "01-09-2026": 22.0},
+        {"Metric": "Loading Hours (Hrs)", "31-08-2026": 88.3, "01-09-2026": 76.4},
+        {"Metric": "Total Freight (₹)", "31-08-2026": 0.0, "01-09-2026": 11299.5},
+        {"Metric": "Parties Serviced", "31-08-2026": 15.0, "01-09-2026": 25.0}
+    ])
+    
+    fig_audit = go.Figure(data=[
+        go.Bar(name='31-08-2026', x=chart_metrics_df['Metric'], y=chart_metrics_df['31-08-2026'], text=chart_metrics_df['31-08-2026'], textposition='auto'),
+        go.Bar(name='01-09-2026', x=chart_metrics_df['Metric'], y=chart_metrics_df['01-09-2026'], text=chart_metrics_df['01-09-2026'], textposition='auto')
+    ])
+    fig_audit.update_layout(barmode='group')
+    st.plotly_chart(fig_audit, use_container_width=True)
