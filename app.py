@@ -240,34 +240,41 @@ else:
 
 if report_mode == "Single Day View":
     if excel_today:
-        # PRE-GENERATE CHARTS OUTSIDE TABS TO ENSURE THEY ARE ALWAYS IN MEMORY FOR PDF EXPORT
+        # PRE-GENERATE CHARTS WITH DATA LABELS
         single_day_figs = []
         if "LOGISTICS AND DISPATCH" in excel_today:
             df_log_prep = excel_today["LOGISTICS AND DISPATCH"]
-            calculate_logistics_kpis(df_log_prep) # Prepares QTY_NUM & LOADING_NUM
+            calculate_logistics_kpis(df_log_prep)
             
+            # 1. Quantity Bar Chart with Data Labels
             if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "QTY" in df_log_prep.columns:
                 fig1 = px.bar(
                     df_log_prep, 
                     x="PARTY NAME (CUSTOMER)", 
                     y="QTY_NUM", 
+                    text_auto='.2f',  # Displays rounded values directly on top of bars
                     title="Total Quantity (MT) per Party Name",
                     labels={"QTY_NUM": "Quantity (MT)"},
                     color="PARTY NAME (CUSTOMER)"
                 )
+                fig1.update_traces(textposition='outside')
                 single_day_figs.append(fig1)
 
+            # 2. Loading Time Bar Chart with Data Labels
             if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "LOADING TIME" in df_log_prep.columns:
                 fig2 = px.bar(
                     df_log_prep, 
                     x="PARTY NAME (CUSTOMER)", 
                     y="LOADING_NUM", 
+                    text_auto='.1f',  # Displays loading hours on top of bars
                     title="Total Loading Time (Hrs) per Party Name",
                     labels={"LOADING_NUM": "Loading Hours"},
                     color_discrete_sequence=["#FF9900"]
                 )
+                fig2.update_traces(textposition='outside')
                 single_day_figs.append(fig2)
 
+            # 3. Unique Invoices Pie Chart with Data Labels
             if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "INVOICE NO." in df_log_prep.columns:
                 inv_df = df_log_prep.groupby("PARTY NAME (CUSTOMER)")["INVOICE NO."].nunique().reset_index()
                 inv_df.columns = ["PARTY NAME (CUSTOMER)", "Invoice Count"]
@@ -277,6 +284,7 @@ if report_mode == "Single Day View":
                     values="Invoice Count", 
                     title="No. of Unique Invoices per Customer"
                 )
+                fig3.update_traces(textinfo='value+percent', textposition='inside') # Shows exact count & % inside slices
                 single_day_figs.append(fig3)
 
         tab_hr, tab_log = st.tabs(["HR AND ADMIN", "LOGISTICS AND DISPATCH"])
@@ -321,7 +329,7 @@ if report_mode == "Single Day View":
             else:
                 st.warning("Sheet 'LOGISTICS AND DISPATCH' not found in uploaded file.")
 
-        # CONVERT PRE-GENERATED CHARTS TO IMAGES FOR PDF
+        # CONVERT PRE-GENERATED CHARTS TO IMAGES FOR PDF EXPORT
         chart_bytes = []
         for fig in single_day_figs:
             try:
@@ -332,7 +340,7 @@ if report_mode == "Single Day View":
                 break
 
         pdf_buf = generate_pdf_report({"Today": excel_today}, chart_images=chart_bytes)
-        st.sidebar.download_button("📥 Download PDF Report (With Graphs)", pdf_buf, "Daily_Audit_Report.pdf", "application/pdf")
+        st.sidebar.download_button("📥 Download PDF Report (With Graphs & Data Labels)", pdf_buf, "Daily_Audit_Report.pdf", "application/pdf")
 
     else:
         st.info("Please upload an Excel file to generate the single-day report.")
@@ -385,9 +393,10 @@ else:
                 df_comp = pd.DataFrame(comp_rows)
                 st.dataframe(df_comp, use_container_width=True)
                 
+                # Comparison Chart with Data Labels
                 fig_comp = go.Figure(data=[
-                    go.Bar(name='Yesterday', x=df_comp['Metric Name'], y=df_comp['Yesterday'], marker_color='#AB63FA'),
-                    go.Bar(name='Today', x=df_comp['Metric Name'], y=df_comp['Today'], marker_color='#00CC96')
+                    go.Bar(name='Yesterday', x=df_comp['Metric Name'], y=df_comp['Yesterday'], text=df_comp['Yesterday'], textposition='outside', marker_color='#AB63FA'),
+                    go.Bar(name='Today', x=df_comp['Metric Name'], y=df_comp['Today'], text=df_comp['Today'], textposition='outside', marker_color='#00CC96')
                 ])
                 fig_comp.update_layout(barmode='group', title="Logistics KPI Comparison")
                 st.plotly_chart(fig_comp, use_container_width=True)
