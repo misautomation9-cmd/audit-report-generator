@@ -1,5 +1,5 @@
 import io
-import streamlit as st
+import Streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -33,6 +33,41 @@ def parse_slash_separated_qty(val):
     if pd.isna(val):
         return 0.0
     val_str = str(val).strip()
+    if '/' in val_str:
+        parts = val_str.split('/')
+        total = 0.0
+        for p in parts:
+            try:
+                total += float(p.strip())
+            except ValueError:
+                pass
+        return total
+    else:
+        try:
+            return float(val_str)
+        except ValueError:
+            return 0.0
+
+def parse_loading_time(val):
+    """
+    Parses loading time strings:
+    - If entry is strictly 'OTO' (case-insensitive), returns 0.0.
+    - If entry contains 'OTO/ 1.5', ignores 'OTO' and parses the value after the slash (1.5).
+    - Handles standard numeric inputs or slash-separated numbers.
+    """
+    if pd.isna(val):
+        return 0.0
+    
+    val_str = str(val).upper().replace("HRS", "").replace("MIN.", "").strip()
+    
+    # Strictly ignore standalone OTO entries
+    if val_str == "OTO":
+        return 0.0
+    
+    # If OTO/ is present, take the portion after OTO/
+    if "OTO/" in val_str:
+        val_str = val_str.split("OTO/")[1].strip()
+        
     if '/' in val_str:
         parts = val_str.split('/')
         total = 0.0
@@ -100,7 +135,7 @@ def calculate_logistics_kpis(df):
         kpis["Total Freight (₹)"] = 0.0
 
     if "LOADING TIME" in df.columns:
-        df["LOADING_NUM"] = pd.to_numeric(df["LOADING TIME"].astype(str).str.replace("HRS", "", case=False).str.replace("MIN.", "", case=False).str.strip(), errors='coerce').fillna(0)
+        df["LOADING_NUM"] = df["LOADING TIME"].apply(parse_loading_time)
         total_loading = df["LOADING_NUM"].sum()
         kpis["Total Loading Time (Hrs)"] = total_loading
         
