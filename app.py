@@ -117,7 +117,7 @@ def display_kpis_safely(kpis):
                 cols[idx].metric(label=k, value=val_str)
 
 def generate_pdf_report(excel_data_dict, chart_images=None):
-    """Generates clean, auto-wrapping landscape PDF report including visual charts."""
+    """Generates landscape PDF report with auto-wrapped tables and embedded Plotly images."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, 
@@ -140,7 +140,7 @@ def generate_pdf_report(excel_data_dict, chart_images=None):
     story.append(Paragraph("OPERATIONS & AUDIT COMPREHENSIVE REPORT", title_style))
     story.append(Spacer(1, 10))
 
-    # 1. ADD DATA TABLES WITH TEXT WRAPPING
+    # 1. ADD DATA TABLES
     for file_label, excel_data in excel_data_dict.items():
         story.append(Paragraph(f"Data Set Source: {file_label}", subtitle_style))
         story.append(Spacer(1, 8))
@@ -153,7 +153,6 @@ def generate_pdf_report(excel_data_dict, chart_images=None):
 
                 clean_df = df.head(15).fillna("-")
                 
-                # Format headers and cells into Paragraphs for auto-wrap
                 headers = [Paragraph(str(col), cell_hdr_style) for col in clean_df.columns]
                 table_data = [headers]
 
@@ -161,7 +160,6 @@ def generate_pdf_report(excel_data_dict, chart_images=None):
                     row_data = [Paragraph(str(val), cell_body_style) for val in row.values]
                     table_data.append(row_data)
 
-                # Page width available = 842 (A4 Landscape width) - 30 (margins) = 812 pt
                 num_cols = len(clean_df.columns)
                 col_width = 812 / num_cols
 
@@ -178,25 +176,22 @@ def generate_pdf_report(excel_data_dict, chart_images=None):
                 story.append(pdf_table)
                 story.append(Spacer(1, 10))
 
-    # 2. EMBED Plotly GRAPHS INTO PDF
+    # 2. EMBED CHARTS INTO PDF
     if chart_images:
         story.append(Spacer(1, 5))
         story.append(Paragraph("Visual Performance Charts", subtitle_style))
         story.append(Spacer(1, 8))
         
-        # Grid layout for charts in PDF
         img_elements = []
         for img_bytes in chart_images:
             img_buf = io.BytesIO(img_bytes)
-            # 380pt width x 200pt height fits 2 charts per row on Landscape A4
             img_elements.append(RLImage(img_buf, width=380, height=200))
         
-        # Group images side-by-side in pairs
         chart_rows = []
         for i in range(0, len(img_elements), 2):
             pair = img_elements[i:i+2]
             if len(pair) == 1:
-                pair.append("") # Spacer filler if odd number of charts
+                pair.append("")
             chart_rows.append(pair)
         
         chart_table = Table(chart_rows, colWidths=[395, 395])
@@ -247,8 +242,6 @@ if report_mode == "Single Day View":
     if excel_today:
         tab_hr, tab_log = st.tabs(["HR AND ADMIN", "LOGISTICS AND DISPATCH"])
         
-        fig1, fig2, fig3 = None, None, None
-        
         # 1. HR AND ADMIN SHEET
         with tab_hr:
             st.header("HR AND ADMIN")
@@ -277,6 +270,9 @@ if report_mode == "Single Day View":
                 st.subheader("📊 Visual Analytics")
                 g1, g2, g3 = st.columns(3)
                 
+                # STORE CHARTS IN SESSION STATE FOR PDF PERSISTENCE
+                st.session_state["charts"] = []
+                
                 with g1:
                     if "PARTY NAME (CUSTOMER)" in df_log.columns and "QTY" in df_log.columns:
                         fig1 = px.bar(
@@ -288,6 +284,7 @@ if report_mode == "Single Day View":
                             color="PARTY NAME (CUSTOMER)"
                         )
                         st.plotly_chart(fig1, use_container_width=True)
+                        st.session_state["charts"].append(fig1)
                 
                 with g2:
                     if "PARTY NAME (CUSTOMER)" in df_log.columns and "LOADING TIME" in df_log.columns:
@@ -300,6 +297,7 @@ if report_mode == "Single Day View":
                             color_discrete_sequence=["#FF9900"]
                         )
                         st.plotly_chart(fig2, use_container_width=True)
+                        st.session_state["charts"].append(fig2)
 
                 with g3:
                     if "PARTY NAME (CUSTOMER)" in df_log.columns and "INVOICE NO." in df_log.columns:
@@ -312,18 +310,19 @@ if report_mode == "Single Day View":
                             title="No. of Unique Invoices per Customer"
                         )
                         st.plotly_chart(fig3, use_container_width=True)
+                        st.session_state["charts"].append(fig3)
             else:
                 st.warning("Sheet 'LOGISTICS AND DISPATCH' not found in uploaded file.")
 
-        # SIDEBAR PDF DOWNLOAD WITH CHARTS
+        # CONVERT STORED SESSION CHARTS TO IMAGES
         chart_bytes = []
-        for fig in [fig1, fig2, fig3]:
-            if fig is not None:
+        if "charts" in st.session_state:
+            for fig in st.session_state["charts"]:
                 try:
                     img_data = fig.to_image(format="png", width=700, height=400)
                     chart_bytes.append(img_data)
-                except Exception as e:
-                    st.sidebar.warning("Install `kaleido` (`pip install kaleido`) to include charts in PDF export.")
+                except Exception:
+                    st.sidebar.warning("Make sure `kaleido` is installed: `pip install kaleido`")
                     break
 
         pdf_buf = generate_pdf_report({"Today": excel_today}, chart_images=chart_bytes)
@@ -336,7 +335,7 @@ if report_mode == "Single Day View":
 else:
     if excel_yesterday and excel_today:
         tab_hr, tab_log = st.tabs(["HR AND ADMIN COMPARISON", "LOGISTICS COMPARISON"])
-        fig_comp = None
+        st.session_state["comp_charts"] = []
         
         with tab_hr:
             st.header("HR AND ADMIN — Side-by-Side Comparison")
@@ -386,6 +385,7 @@ else:
                 ])
                 fig_comp.update_layout(barmode='group', title="Logistics KPI Comparison")
                 st.plotly_chart(fig_comp, use_container_width=True)
+                st.session_state["comp_charts"].append(fig_comp)
                 
                 c1, c2 = st.columns(2)
                 with c1:
@@ -396,12 +396,13 @@ else:
                     st.dataframe(df_log_t, use_container_width=True)
 
         chart_bytes = []
-        if fig_comp is not None:
-            try:
-                img_data = fig_comp.to_image(format="png", width=700, height=400)
-                chart_bytes.append(img_data)
-            except Exception:
-                pass
+        if "comp_charts" in st.session_state:
+            for fig in st.session_state["comp_charts"]:
+                try:
+                    img_data = fig.to_image(format="png", width=700, height=400)
+                    chart_bytes.append(img_data)
+                except Exception:
+                    pass
 
         pdf_buf = generate_pdf_report({
             f"Yesterday ({file_yesterday.name})": excel_yesterday,
