@@ -12,65 +12,81 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Godown & Operations Master Audit System",
-    page_icon="🏭",
+    page_title="Operations Audit: HR, Admin & Logistics",
+    page_icon="🚚",
     layout="wide"
 )
 
-st.title("🏭 GODOWN & OPERATIONS MASTER AUDIT DASHBOARD")
-st.caption("Upload daily Excel workbooks to analyze departmental KPIs, perform multi-day comparisons, and export audit reports.")
+st.title("🚚 AUDIT & OPERATIONS DASHBOARD: HR, ADMIN & LOGISTICS")
+st.caption("Upload daily Excel files to generate single-day reports or run side-by-side date comparisons.")
 
-# --- EXPECTED SHEETS DEFINITION ---
-EXPECTED_SHEETS = [
-    "HR And Admin",
-    "Logistics And Dispatch",
-    "Purchase Order",
-    "Purchase Plates",
-    "Purchase Structure",
-    "Sales And Marketing",
-    "Accounts",
-    "Sales Person Wise Dispatch",
-    "Stock"
-]
+# --- HELPER FUNCTIONS ---
 
-# --- HELPER FUNCTIONS FOR CALCULATIONS & METRICS ---
+def clean_column_names(df):
+    """Normalizes column names by removing extra spaces and forcing standard casing."""
+    df.columns = [str(col).strip() for col in df.columns]
+    return df
 
 def calculate_logistics_kpis(df):
     kpis = {}
-    if "Vehicle No" in df.columns:
-        kpis["Unique Vehicles Count"] = df["Vehicle No"].nunique()
-    if "Transport" in df.columns:
-        kpis["Unique Transports Count"] = df["Transport"].nunique()
-    if "Party Name" in df.columns:
-        kpis["Unique Parties Count"] = df["Party Name"].nunique()
-    if "Invoice No" in df.columns:
-        kpis["Unique Invoices Count"] = df["Invoice No"].astype(str).nunique()
-    if "QNTY" in df.columns:
-        kpis["Total Quantity (MT)"] = df["QNTY"].sum()
     
-    # Freight Calculation (PMT vs Fixed)
-    if "FREIGHT" in df.columns:
+    # 1. Unique Vehicle Count
+    if "VEHICLE NO." in df.columns:
+        kpis["Unique Vehicles Count"] = df["VEHICLE NO."].dropna().nunique()
+        
+    # 2. Unique Transport Count
+    if "TRANSPORT" in df.columns:
+        kpis["Unique Transports Count"] = df["TRANSPORT"].dropna().nunique()
+        
+    # 3. Unique Party Name Count
+    if "PARTY NAME (CUSTOMER)" in df.columns:
+        kpis["Unique Parties Count"] = df["PARTY NAME (CUSTOMER)"].dropna().nunique()
+        
+    # 4. Unique Invoice Count (Handling invoices separated by '/')
+    if "INVOICE NO." in df.columns:
+        raw_invoices = df["INVOICE NO."].dropna().astype(str).tolist()
+        split_invoices = set()
+        for inv in raw_invoices:
+            # Splits invoices containing slashes (e.g., "INV101/INV102")
+            parts = [p.strip() for p in inv.split('/') if p.strip()]
+            split_invoices.update(parts)
+        kpis["Unique Invoices Count"] = len(split_invoices)
+        
+    # 5. Sum of QTY
+    if "QTY" in df.columns:
+        df["QTY_NUM"] = pd.to_numeric(df["QTY"], errors='coerce').fillna(0)
+        kpis["Total Quantity (MT)"] = df["QTY_NUM"].sum()
+        
+    # 6. Calculated Freight (Handling /PMT rates vs Fixed rates)
+    if "FREIGHT (IF)" in df.columns:
         total_freight = 0.0
         for _, row in df.iterrows():
-            freight_val = str(row["FREIGHT"]).strip()
-            qty = row.get("QNTY", 1.0)
-            if "PMT" in freight_val.upper():
+            freight_str = str(row["FREIGHT (IF)"]).upper().strip()
+            qty = float(row.get("QTY_NUM", 0))
+            
+            if "PMT" in freight_str:
+                # Extract numerical value from strings like "500/PMT" or "500 PMT"
+                clean_num = ''.join(c for c in freight_str.replace("PMT", "").replace("/", "") if c.isdigit() or c == '.')
                 try:
-                    rate = float(freight_val.upper().replace("/PMT", "").replace("PMT", "").strip())
-                    total_freight += rate * float(qty)
+                    total_freight += float(clean_num) * qty
                 except ValueError:
                     pass
             else:
                 try:
-                    total_freight += float(freight_val)
+                    total_freight += float(freight_str)
                 except ValueError:
                     pass
-        kpis["Calculated Total Freight (₹)"] = total_freight
+        kpis["Total Freight (₹)"] = total_freight
 
-    if "Loading Hours" in df.columns:
-        kpis["Total Loading Hours"] = df["Loading Hours"].sum()
-        if "Vehicle No" in df.columns and kpis.get("Unique Vehicles Count", 0) > 0:
-            kpis["Average Loading Time / Vehicle"] = kpis["Total Loading Hours"] / kpis["Unique Vehicles Count"]
+    # 7. Loading Time Metrics
+    if "LOADING TIME" in df.columns:
+        df["LOADING_NUM"] = pd.to_numeric(df["LOADING TIME"], errors='coerce').fillna(0)
+        total_loading = df["LOADING_NUM"].sum()
+        kpis["Total Loading Time (Hrs)"] = total_loading
+        
+        veh_count = kpis.get("Unique Vehicles Count", 0)
+        if veh_count > 0:
+            kpis["Average Loading Time / Vehicle (Hrs)"] = total_loading / veh_count
 
     return kpis
 
@@ -85,27 +101,26 @@ def display_kpis_safely(kpis):
                 val_str = f"{v:,.2f}" if isinstance(v, float) else str(v)
                 cols[idx].metric(label=k, value=val_str)
 
-def generate_pdf_report(excel_data_dict, filename="Daily_Audit_Report.pdf"):
+def generate_pdf_report(excel_data_dict):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
     story = []
     
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(name="TitleStyle", fontName="Helvetica-Bold", fontSize=16, leading=20, alignment=1, textColor=colors.HexColor("#1A252F"))
-    heading_style = ParagraphStyle(name="HeadingStyle", fontName="Helvetica-Bold", fontSize=12, leading=16, textColor=colors.HexColor("#2C3E50"))
+    title_style = ParagraphStyle(name="TitleStyle", fontName="Helvetica-Bold", fontSize=14, leading=18, alignment=1)
+    heading_style = ParagraphStyle(name="HeadingStyle", fontName="Helvetica-Bold", fontSize=11, leading=14)
 
-    story.append(Paragraph("DAILY GODOWN DISPATCH, STOCK & OPERATIONAL AUDIT REPORT", title_style))
+    story.append(Paragraph("OPERATIONS AUDIT REPORT: HR, ADMIN & LOGISTICS", title_style))
     story.append(Spacer(1, 15))
 
-    # Handles single dictionary of sheets or comparison dictionary of files
     for file_label, excel_data in excel_data_dict.items():
-        story.append(Paragraph(f"Data Source: {file_label}", title_style))
+        story.append(Paragraph(f"Data Set: {file_label}", title_style))
         story.append(Spacer(1, 10))
 
-        for sheet_name in EXPECTED_SHEETS:
+        for sheet_name in ["HR AND ADMIN", "LOGISTICS AND DISPATCH"]:
             if sheet_name in excel_data:
                 df = excel_data[sheet_name]
-                story.append(Paragraph(f"Module: {sheet_name}", heading_style))
+                story.append(Paragraph(f"Sheet: {sheet_name}", heading_style))
                 story.append(Spacer(1, 5))
 
                 display_df = df.head(10).astype(str)
@@ -118,7 +133,6 @@ def generate_pdf_report(excel_data_dict, filename="Daily_Audit_Report.pdf"):
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                     ('FONTSIZE', (0, 0), (-1, -1), 7),
                     ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#B0BEC5')),
-                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                 ]))
                 story.append(pdf_table)
                 story.append(Spacer(1, 12))
@@ -127,215 +141,191 @@ def generate_pdf_report(excel_data_dict, filename="Daily_Audit_Report.pdf"):
     buffer.seek(0)
     return buffer
 
-# --- SIDEBAR & NAVIGATION ---
-st.sidebar.header("📂 Operational Data Controls")
+# --- SIDEBAR CONTROLS ---
+st.sidebar.header("📁 Data Controls")
 
-# NEW: REPORT MODE SELECTION
 report_mode = st.sidebar.radio(
-    "Select Reporting Mode",
+    "Select Report Type",
     ["Single Day View", "Multiple Day Comparison"]
 )
 
-excel_data_today = None
-excel_data_yesterday = None
+excel_today = None
+excel_yesterday = None
 
 if report_mode == "Single Day View":
-    uploaded_today = st.sidebar.file_uploader("Upload Today's Master Excel Workbook", type=["xlsx", "xls"], key="single_today")
-    if uploaded_today is not None:
-        excel_data_today = pd.read_excel(uploaded_today, sheet_name=None)
-        st.sidebar.success(f"Workbook '{uploaded_today.name}' Loaded!")
+    file_today = st.sidebar.file_uploader("Upload Master Excel Workbook", type=["xlsx", "xls"], key="single_today")
+    if file_today:
+        raw_dict = pd.read_excel(file_today, sheet_name=None)
+        excel_today = {str(k).upper().strip(): clean_column_names(v) for k, v in raw_dict.items()}
+        st.sidebar.success(f"Loaded: {file_today.name}")
         
-        pdf_buf = generate_pdf_report({"Today": excel_data_today})
-        st.sidebar.download_button(
-            label="📥 Download Audit PDF Report",
-            data=pdf_buf,
-            file_name="Daily_Audit_Report.pdf",
-            mime="application/pdf"
-        )
+        pdf_buf = generate_pdf_report({"Today": excel_today})
+        st.sidebar.download_button("📥 Download PDF Report", pdf_buf, "Daily_Audit_Report.pdf", "application/pdf")
 
 else:
-    uploaded_yesterday = st.sidebar.file_uploader("Upload Yesterday's Excel Workbook", type=["xlsx", "xls"], key="multi_yest")
-    uploaded_today = st.sidebar.file_uploader("Upload Today's Master Excel Workbook", type=["xlsx", "xls"], key="multi_today")
+    file_yesterday = st.sidebar.file_uploader("Upload Yesterday's Excel Workbook", type=["xlsx", "xls"], key="m_yest")
+    file_today = st.sidebar.file_uploader("Upload Today's Excel Workbook", type=["xlsx", "xls"], key="m_today")
     
-    if uploaded_yesterday is not None and uploaded_today is not None:
-        excel_data_yesterday = pd.read_excel(uploaded_yesterday, sheet_name=None)
-        excel_data_today = pd.read_excel(uploaded_today, sheet_name=None)
-        st.sidebar.success("Both Yesterday and Today Workbooks Loaded!")
+    if file_yesterday and file_today:
+        raw_yest = pd.read_excel(file_yesterday, sheet_name=None)
+        raw_tod = pd.read_excel(file_today, sheet_name=None)
+        
+        excel_yesterday = {str(k).upper().strip(): clean_column_names(v) for k, v in raw_yest.items()}
+        excel_today = {str(k).upper().strip(): clean_column_names(v) for k, v in raw_tod.items()}
+        st.sidebar.success("Both Workbooks Loaded Successfully!")
         
         pdf_buf = generate_pdf_report({
-            f"Yesterday ({uploaded_yesterday.name})": excel_data_yesterday,
-            f"Today ({uploaded_today.name})": excel_data_today
+            f"Yesterday ({file_yesterday.name})": excel_yesterday,
+            f"Today ({file_today.name})": excel_today
         })
-        st.sidebar.download_button(
-            label="📥 Download Comparative PDF Report",
-            data=pdf_buf,
-            file_name="Comparative_Audit_Report.pdf",
-            mime="application/pdf"
-        )
+        st.sidebar.download_button("📥 Download Comparative PDF Report", pdf_buf, "Comparative_Audit_Report.pdf", "application/pdf")
 
-# --- MAIN WORKSPACE RENDER ---
+# --- MAIN WORKSPACE ---
 
 if report_mode == "Single Day View":
-    if excel_data_today is not None:
-        tabs = st.tabs(EXPECTED_SHEETS)
-
-        # 1. HR AND ADMIN
-        with tabs[0]:
-            st.header("HR And Admin Report")
-            if "HR And Admin" in excel_data_today:
-                st.dataframe(excel_data_today["HR And Admin"], use_container_width=True)
-
-        # 2. LOGISTICS AND DISPATCH
-        with tabs[1]:
-            st.header("Logistics And Dispatch Analytics")
-            if "Logistics And Dispatch" in excel_data_today:
-                df = excel_data_today["Logistics And Dispatch"]
-                display_kpis_safely(calculate_logistics_kpis(df))
-                st.markdown("---")
-                st.dataframe(df, use_container_width=True)
-                if "Vehicle No" in df.columns and "QNTY" in df.columns:
-                    fig = px.bar(df, x="Vehicle No", y="QNTY", title="Dispatch Quantity Tonnage per Vehicle", color="Transport" if "Transport" in df.columns else None)
-                    st.plotly_chart(fig, use_container_width=True)
-
-        # 3. PURCHASE ORDER
-        with tabs[2]:
-            st.header("Purchase Order Summary")
-            if "Purchase Order" in excel_data_today:
-                df = excel_data_today["Purchase Order"]
-                kpis = {}
-                if "PO" in df.columns: kpis["Unique POs"] = df["PO"].nunique()
-                if "Party Name" in df.columns: kpis["Unique Parties"] = df["Party Name"].nunique()
-                if "Pcs" in df.columns: kpis["Total Pieces"] = df["Pcs"].sum()
-                if "Qty" in df.columns: kpis["Total PO Qty"] = df["Qty"].sum()
-                if "Rate" in df.columns: kpis["Avg Purchase Rate (₹)"] = df["Rate"].mean()
-                display_kpis_safely(kpis)
-                st.dataframe(df, use_container_width=True)
-
-        # 4. PURCHASE PLATES
-        with tabs[3]:
-            st.header("Purchase Pending Plates Report")
-            if "Purchase Plates" in excel_data_today:
-                df = excel_data_today["Purchase Plates"]
-                kpis = {}
-                if "PO" in df.columns: kpis["Unique Pending POs"] = df["PO"].nunique()
-                if "Party" in df.columns: kpis["Unique Suppliers"] = df["Party"].nunique()
-                if "Recd Qty" in df.columns: kpis["Received Qty"] = df["Recd Qty"].sum()
-                if "Pending" in df.columns: kpis["Pending Qty"] = df["Pending"].sum()
-                display_kpis_safely(kpis)
-                st.dataframe(df, use_container_width=True)
-
-        # 5. PURCHASE STRUCTURE
-        with tabs[4]:
-            st.header("Purchase Pending Structure Report")
-            if "Purchase Structure" in excel_data_today:
-                st.dataframe(excel_data_today["Purchase Structure"], use_container_width=True)
-
-        # 6. SALES AND MARKETING
-        with tabs[5]:
-            st.header("Sales & Marketing Performance Report")
-            if "Sales And Marketing" in excel_data_today:
-                df = excel_data_today["Sales And Marketing"]
-                st.dataframe(df, use_container_width=True)
-                if "Sales Person" in df.columns and "Order Value" in df.columns:
-                    fig = px.pie(df, names="Sales Person", values="Order Value", title="Order Value Contribution by Sales Person")
-                    st.plotly_chart(fig, use_container_width=True)
-
-        # 7. ACCOUNTS
-        with tabs[6]:
-            st.header("Accounts & Financial Audit Summary")
-            if "Accounts" in excel_data_today:
-                st.dataframe(excel_data_today["Accounts"], use_container_width=True)
-
-        # 8. SALES PERSON WISE DISPATCH
-        with tabs[7]:
-            st.header("Salesperson-Wise Dispatch Summary")
-            if "Sales Person Wise Dispatch" in excel_data_today:
-                df = excel_data_today["Sales Person Wise Dispatch"]
-                st.dataframe(df, use_container_width=True)
-                if "Sales Person" in df.columns and "Total Vehicles" in df.columns:
-                    fig = px.bar(df, x="Sales Person", y="Total Vehicles", color="Sales Person", text="Total Vehicles", title="Total Vehicles Handled per Salesperson")
-                    st.plotly_chart(fig, use_container_width=True)
-
-        # 9. STOCK
-        with tabs[8]:
-            st.header("Stock Balance & Movement Analysis")
-            if "Stock" in excel_data_today:
-                df = excel_data_today["Stock"]
-                if "Opening Stock (MT)" in df.columns and "Closing Stock (MT)" in df.columns:
-                    df["Variance (MT)"] = df["Closing Stock (MT)"] - df["Opening Stock (MT)"]
-                st.dataframe(df, use_container_width=True)
+    if excel_today:
+        tab_hr, tab_log = st.tabs(["HR AND ADMIN", "LOGISTICS AND DISPATCH"])
+        
+        # 1. HR AND ADMIN SHEET
+        with tab_hr:
+            st.header("HR AND ADMIN")
+            if "HR AND ADMIN" in excel_today:
+                df_hr = excel_today["HR AND ADMIN"]
                 
-                item_col = "Particulars" if "Particulars" in df.columns else ("Particulars/Item" if "Particulars/Item" in df.columns else None)
-                if item_col:
-                    fig = go.Figure(data=[
-                        go.Bar(name='Opening Stock (MT)', x=df[item_col], y=df['Opening Stock (MT)'], marker_color='#3366CC'),
-                        go.Bar(name='Closing Stock (MT)', x=df[item_col], y=df['Closing Stock (MT)'], marker_color='#109618')
-                    ])
-                    if "Yesterday Production (MT)" in df.columns:
-                        fig.add_trace(go.Bar(name='Yesterday Production (MT)', x=df[item_col], y=df['Yesterday Production (MT)'], marker_color='#FF9900'))
-                    if "Dispatch Stock (MT)" in df.columns:
-                        fig.add_trace(go.Bar(name='Dispatch Stock (MT)', x=df[item_col], y=df['Dispatch Stock (MT)'], marker_color='#DC3912'))
-                    fig.update_layout(barmode='group', title="Item-Wise Stock Breakdown & Movement (MT)")
-                    st.plotly_chart(fig, use_container_width=True)
+                # Check for 3rd Column and display notice
+                if len(df_hr.columns) >= 3:
+                    third_col_name = df_hr.columns[2]
+                    st.info(f"Dynamic 3rd Column Detected: **{third_col_name}**")
+                
+                st.dataframe(df_hr, use_container_width=True)
+            else:
+                st.warning("Sheet 'HR AND ADMIN' not found in uploaded file.")
+                
+        # 2. LOGISTICS AND DISPATCH SHEET
+        with tab_log:
+            st.header("LOGISTICS AND DISPATCH")
+            if "LOGISTICS AND DISPATCH" in excel_today:
+                df_log = excel_today["LOGISTICS AND DISPATCH"]
+                
+                # Key Metrics Display
+                st.subheader("📌 Key Logistics Performance Indicators")
+                kpis = calculate_logistics_kpis(df_log)
+                display_kpis_safely(kpis)
+                
+                st.markdown("---")
+                st.dataframe(df_log, use_container_width=True)
+                
+                st.markdown("---")
+                st.subheader("📊 Visual Analytics")
+                g1, g2, g3 = st.columns(3)
+                
+                # Graph 1: Party Name vs Qty
+                with g1:
+                    if "PARTY NAME (CUSTOMER)" in df_log.columns and "QTY" in df_log.columns:
+                        df_log["QTY_NUM"] = pd.to_numeric(df_log["QTY"], errors='coerce').fillna(0)
+                        fig1 = px.bar(
+                            df_log, 
+                            x="PARTY NAME (CUSTOMER)", 
+                            y="QTY_NUM", 
+                            title="Total Quantity (MT) per Party Name",
+                            color="PARTY NAME (CUSTOMER)"
+                        )
+                        st.plotly_chart(fig1, use_container_width=True)
+                
+                # Graph 2: Loading Time Party-wise
+                with g2:
+                    if "PARTY NAME (CUSTOMER)" in df_log.columns and "LOADING TIME" in df_log.columns:
+                        df_log["LOADING_NUM"] = pd.to_numeric(df_log["LOADING TIME"], errors='coerce').fillna(0)
+                        fig2 = px.bar(
+                            df_log, 
+                            x="PARTY NAME (CUSTOMER)", 
+                            y="LOADING_NUM", 
+                            title="Total Loading Time (Hrs) per Party Name",
+                            color_discrete_sequence=["#FF9900"]
+                        )
+                        st.plotly_chart(fig2, use_container_width=True)
 
+                # Graph 3: Number of Invoices per Customer
+                with g3:
+                    if "PARTY NAME (CUSTOMER)" in df_log.columns and "INVOICE NO." in df_log.columns:
+                        inv_df = df_log.groupby("PARTY NAME (CUSTOMER)")["INVOICE NO."].nunique().reset_index()
+                        inv_df.columns = ["PARTY NAME (CUSTOMER)", "Invoice Count"]
+                        fig3 = px.pie(
+                            inv_df, 
+                            names="PARTY NAME (CUSTOMER)", 
+                            values="Invoice Count", 
+                            title="No. of Unique Invoices per Customer"
+                        )
+                        st.plotly_chart(fig3, use_container_width=True)
+            else:
+                st.warning("Sheet 'LOGISTICS AND DISPATCH' not found in uploaded file.")
     else:
-        st.info("Upload Today's Excel file in the sidebar to start processing single-day reports.")
+        st.info("Please upload an Excel file to generate the single-day report.")
 
-# COMPARATIVE MULTI-DAY MODE
+# MULTIPLE DAY COMPARISON VIEW
 else:
-    if excel_data_yesterday is not None and excel_data_today is not None:
-        tabs = st.tabs(EXPECTED_SHEETS)
-
-        for idx, sheet_name in enumerate(EXPECTED_SHEETS):
-            with tabs[idx]:
-                st.header(f"Comparative Analysis: {sheet_name}")
-
-                df_yest = excel_data_yesterday.get(sheet_name)
-                df_today = excel_data_today.get(sheet_name)
-
-                if df_yest is not None and df_today is not None:
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.subheader("📅 Yesterday's Report")
-                        st.dataframe(df_yest, use_container_width=True)
-                    with col2:
-                        st.subheader("📅 Today's Report")
-                        st.dataframe(df_today, use_container_width=True)
-
-                    st.markdown("---")
-                    st.subheader(f"📊 Quantitative Variance Summary — {sheet_name}")
-
-                    # Automatically extract and compare numeric metrics
-                    num_cols_yest = df_yest.select_dtypes(include=['number']).columns
-                    num_cols_today = df_today.select_dtypes(include=['number']).columns
-                    common_num_cols = list(set(num_cols_yest).intersection(set(num_cols_today)))
-
-                    if common_num_cols:
-                        comp_metrics = []
-                        for col in common_num_cols:
-                            val_y = df_yest[col].sum()
-                            val_t = df_today[col].sum()
-                            diff = val_t - val_y
-                            comp_metrics.append({
-                                "Metric Name": col,
-                                "Yesterday Total": round(val_y, 2),
-                                "Today Total": round(val_t, 2),
-                                "Variance (Difference)": round(diff, 2)
-                            })
-                        
-                        df_comp = pd.DataFrame(comp_metrics)
-                        st.dataframe(df_comp, use_container_width=True)
-
-                        # Comparative Chart
-                        fig_comp = go.Figure(data=[
-                            go.Bar(name='Yesterday', x=df_comp['Metric Name'], y=df_comp['Yesterday Total'], marker_color='#AB63FA'),
-                            go.Bar(name='Today', x=df_comp['Metric Name'], y=df_comp['Today Total'], marker_color='#00CC96')
-                        ])
-                        fig_comp.update_layout(barmode='group', title=f"Metric Comparison ({sheet_name})")
-                        st.plotly_chart(fig_comp, use_container_width=True)
-                    else:
-                        st.info("No common numeric columns found to calculate automated variances.")
-                else:
-                    st.warning(f"Sheet '{sheet_name}' is missing in one or both uploaded workbooks.")
+    if excel_yesterday and excel_today:
+        tab_hr, tab_log = st.tabs(["HR AND ADMIN COMPARISON", "LOGISTICS COMPARISON"])
+        
+        # HR AND ADMIN COMPARISON
+        with tab_hr:
+            st.header("HR AND ADMIN — Side-by-Side Comparison")
+            df_hr_y = excel_yesterday.get("HR AND ADMIN")
+            df_hr_t = excel_today.get("HR AND ADMIN")
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("📅 Yesterday")
+                if df_hr_y is not None:
+                    st.dataframe(df_hr_y, use_container_width=True)
+            with c2:
+                st.subheader("📅 Today")
+                if df_hr_t is not None:
+                    st.dataframe(df_hr_t, use_container_width=True)
+                    
+        # LOGISTICS COMPARISON
+        with tab_log:
+            st.header("LOGISTICS AND DISPATCH — Side-by-Side & Variance Comparison")
+            df_log_y = excel_yesterday.get("LOGISTICS AND DISPATCH")
+            df_log_t = excel_today.get("LOGISTICS AND DISPATCH")
+            
+            if df_log_y is not None and df_log_t is not None:
+                kpis_y = calculate_logistics_kpis(df_log_y)
+                kpis_t = calculate_logistics_kpis(df_log_t)
+                
+                # Comparative Metrics Table
+                st.subheader("📈 KPI Variance Summary")
+                comp_rows = []
+                all_keys = set(kpis_y.keys()).union(set(kpis_t.keys()))
+                
+                for k in all_keys:
+                    val_y = kpis_y.get(k, 0.0)
+                    val_t = kpis_t.get(k, 0.0)
+                    diff = val_t - val_y
+                    comp_rows.append({
+                        "Metric Name": k,
+                        "Yesterday": round(val_y, 2),
+                        "Today": round(val_t, 2),
+                        "Variance (Difference)": round(diff, 2)
+                    })
+                
+                df_comp = pd.DataFrame(comp_rows)
+                st.dataframe(df_comp, use_container_width=True)
+                
+                # Comparative Chart
+                fig_comp = go.Figure(data=[
+                    go.Bar(name='Yesterday', x=df_comp['Metric Name'], y=df_comp['Yesterday'], marker_color='#AB63FA'),
+                    go.Bar(name='Today', x=df_comp['Metric Name'], y=df_comp['Today'], marker_color='#00CC96')
+                ])
+                fig_comp.update_layout(barmode='group', title="Logistics KPI Comparison")
+                st.plotly_chart(fig_comp, use_container_width=True)
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.subheader("📅 Yesterday's Raw Data")
+                    st.dataframe(df_log_y, use_container_width=True)
+                with c2:
+                    st.subheader("📅 Today's Raw Data")
+                    st.dataframe(df_log_t, use_container_width=True)
     else:
-        st.info("Upload both Yesterday's and Today's Excel workbooks in the sidebar to run the multi-day comparison analysis.")
+        st.info("Please upload both Yesterday's and Today's Excel files to view comparison metrics.")
