@@ -240,6 +240,45 @@ else:
 
 if report_mode == "Single Day View":
     if excel_today:
+        # PRE-GENERATE CHARTS OUTSIDE TABS TO ENSURE THEY ARE ALWAYS IN MEMORY FOR PDF EXPORT
+        single_day_figs = []
+        if "LOGISTICS AND DISPATCH" in excel_today:
+            df_log_prep = excel_today["LOGISTICS AND DISPATCH"]
+            calculate_logistics_kpis(df_log_prep) # Prepares QTY_NUM & LOADING_NUM
+            
+            if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "QTY" in df_log_prep.columns:
+                fig1 = px.bar(
+                    df_log_prep, 
+                    x="PARTY NAME (CUSTOMER)", 
+                    y="QTY_NUM", 
+                    title="Total Quantity (MT) per Party Name",
+                    labels={"QTY_NUM": "Quantity (MT)"},
+                    color="PARTY NAME (CUSTOMER)"
+                )
+                single_day_figs.append(fig1)
+
+            if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "LOADING TIME" in df_log_prep.columns:
+                fig2 = px.bar(
+                    df_log_prep, 
+                    x="PARTY NAME (CUSTOMER)", 
+                    y="LOADING_NUM", 
+                    title="Total Loading Time (Hrs) per Party Name",
+                    labels={"LOADING_NUM": "Loading Hours"},
+                    color_discrete_sequence=["#FF9900"]
+                )
+                single_day_figs.append(fig2)
+
+            if "PARTY NAME (CUSTOMER)" in df_log_prep.columns and "INVOICE NO." in df_log_prep.columns:
+                inv_df = df_log_prep.groupby("PARTY NAME (CUSTOMER)")["INVOICE NO."].nunique().reset_index()
+                inv_df.columns = ["PARTY NAME (CUSTOMER)", "Invoice Count"]
+                fig3 = px.pie(
+                    inv_df, 
+                    names="PARTY NAME (CUSTOMER)", 
+                    values="Invoice Count", 
+                    title="No. of Unique Invoices per Customer"
+                )
+                single_day_figs.append(fig3)
+
         tab_hr, tab_log = st.tabs(["HR AND ADMIN", "LOGISTICS AND DISPATCH"])
         
         # 1. HR AND ADMIN SHEET
@@ -268,62 +307,29 @@ if report_mode == "Single Day View":
                 
                 st.markdown("---")
                 st.subheader("📊 Visual Analytics")
-                g1, g2, g3 = st.columns(3)
-                
-                # STORE CHARTS IN SESSION STATE FOR PDF PERSISTENCE
-                st.session_state["charts"] = []
-                
-                with g1:
-                    if "PARTY NAME (CUSTOMER)" in df_log.columns and "QTY" in df_log.columns:
-                        fig1 = px.bar(
-                            df_log, 
-                            x="PARTY NAME (CUSTOMER)", 
-                            y="QTY_NUM", 
-                            title="Total Quantity (MT) per Party Name",
-                            labels={"QTY_NUM": "Quantity (MT)"},
-                            color="PARTY NAME (CUSTOMER)"
-                        )
-                        st.plotly_chart(fig1, use_container_width=True)
-                        st.session_state["charts"].append(fig1)
-                
-                with g2:
-                    if "PARTY NAME (CUSTOMER)" in df_log.columns and "LOADING TIME" in df_log.columns:
-                        fig2 = px.bar(
-                            df_log, 
-                            x="PARTY NAME (CUSTOMER)", 
-                            y="LOADING_NUM", 
-                            title="Total Loading Time (Hrs) per Party Name",
-                            labels={"LOADING_NUM": "Loading Hours"},
-                            color_discrete_sequence=["#FF9900"]
-                        )
-                        st.plotly_chart(fig2, use_container_width=True)
-                        st.session_state["charts"].append(fig2)
-
-                with g3:
-                    if "PARTY NAME (CUSTOMER)" in df_log.columns and "INVOICE NO." in df_log.columns:
-                        inv_df = df_log.groupby("PARTY NAME (CUSTOMER)")["INVOICE NO."].nunique().reset_index()
-                        inv_df.columns = ["PARTY NAME (CUSTOMER)", "Invoice Count"]
-                        fig3 = px.pie(
-                            inv_df, 
-                            names="PARTY NAME (CUSTOMER)", 
-                            values="Invoice Count", 
-                            title="No. of Unique Invoices per Customer"
-                        )
-                        st.plotly_chart(fig3, use_container_width=True)
-                        st.session_state["charts"].append(fig3)
+                if len(single_day_figs) > 0:
+                    g1, g2, g3 = st.columns(3)
+                    with g1:
+                        if len(single_day_figs) > 0:
+                            st.plotly_chart(single_day_figs[0], use_container_width=True)
+                    with g2:
+                        if len(single_day_figs) > 1:
+                            st.plotly_chart(single_day_figs[1], use_container_width=True)
+                    with g3:
+                        if len(single_day_figs) > 2:
+                            st.plotly_chart(single_day_figs[2], use_container_width=True)
             else:
                 st.warning("Sheet 'LOGISTICS AND DISPATCH' not found in uploaded file.")
 
-        # CONVERT STORED SESSION CHARTS TO IMAGES
+        # CONVERT PRE-GENERATED CHARTS TO IMAGES FOR PDF
         chart_bytes = []
-        if "charts" in st.session_state:
-            for fig in st.session_state["charts"]:
-                try:
-                    img_data = fig.to_image(format="png", width=700, height=400)
-                    chart_bytes.append(img_data)
-                except Exception:
-                    st.sidebar.warning("Make sure `kaleido` is installed: `pip install kaleido`")
-                    break
+        for fig in single_day_figs:
+            try:
+                img_data = fig.to_image(format="png", width=700, height=400)
+                chart_bytes.append(img_data)
+            except Exception:
+                st.sidebar.warning("Make sure `kaleido` is installed: `pip install kaleido`")
+                break
 
         pdf_buf = generate_pdf_report({"Today": excel_today}, chart_images=chart_bytes)
         st.sidebar.download_button("📥 Download PDF Report (With Graphs)", pdf_buf, "Daily_Audit_Report.pdf", "application/pdf")
@@ -335,7 +341,7 @@ if report_mode == "Single Day View":
 else:
     if excel_yesterday and excel_today:
         tab_hr, tab_log = st.tabs(["HR AND ADMIN COMPARISON", "LOGISTICS COMPARISON"])
-        st.session_state["comp_charts"] = []
+        comp_figs = []
         
         with tab_hr:
             st.header("HR AND ADMIN — Side-by-Side Comparison")
@@ -385,7 +391,7 @@ else:
                 ])
                 fig_comp.update_layout(barmode='group', title="Logistics KPI Comparison")
                 st.plotly_chart(fig_comp, use_container_width=True)
-                st.session_state["comp_charts"].append(fig_comp)
+                comp_figs.append(fig_comp)
                 
                 c1, c2 = st.columns(2)
                 with c1:
@@ -396,13 +402,12 @@ else:
                     st.dataframe(df_log_t, use_container_width=True)
 
         chart_bytes = []
-        if "comp_charts" in st.session_state:
-            for fig in st.session_state["comp_charts"]:
-                try:
-                    img_data = fig.to_image(format="png", width=700, height=400)
-                    chart_bytes.append(img_data)
-                except Exception:
-                    pass
+        for fig in comp_figs:
+            try:
+                img_data = fig.to_image(format="png", width=700, height=400)
+                chart_bytes.append(img_data)
+            except Exception:
+                pass
 
         pdf_buf = generate_pdf_report({
             f"Yesterday ({file_yesterday.name})": excel_yesterday,
