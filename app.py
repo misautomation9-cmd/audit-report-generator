@@ -1,162 +1,240 @@
 import io
-import re
-import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.platypus import HRFlowable, Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import streamlit as st
 
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib import colors
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, PageBreak, Image
+st.set_page_config(
+    page_title="Godown Stock PDF Generator", page_icon="📄", layout="centered"
 )
-from reportlab.lib.styles import ParagraphStyle
 
-# ==========================================
-# 1. HELPER PARSERS & CLEANERS
-# ==========================================
+st.title("📦 Daily Stock & Dispatch PDF Generator")
+st.write(
+    "Upload your daily Excel workbook to generate and download the consolidated PDF report."
+)
 
-def parse_num(v):
-    if pd.isna(v) or not str(v).strip() or str(v).strip() in ['-', 'None', 'nan']:
-        return 0.0
-    clean = re.sub(r'[^0-9\.]', '', str(v).strip())
-    try:
-        return float(clean) if clean else 0.0
-    except ValueError:
-        return 0.0
+uploaded_file = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
 
-# ==========================================
-# 2. DEPARTMENTAL PARSING ENGINE
-# ==========================================
 
-def parse_hr_admin(df):
-    """Parses row-wise KPI structure of HR & Admin."""
-    df_clean = df.dropna(how='all').dropna(how='all', axis=1)
-    kpi_col = df_clean.columns[0]
-    df_clean = df_clean[df_clean[kpi_col].notna()]
-    return df_clean
+def build_pdf_report(
+    sales_df, delayed_df, summary_df, stock_df, chart1_bytes, chart2_bytes
+):
+  buffer = io.BytesIO()
+  doc = SimpleDocTemplate(
+      buffer,
+      pagesize=A4,
+      rightMargin=25,
+      leftMargin=25,
+      topMargin=25,
+      bottomMargin=25,
+  )
+  elements = []
 
-def parse_logistics(df):
-    """Parses Dispatch & Freight tables."""
-    df_c = df.dropna(how='all').copy()
-    col_map = {str(c).strip().lower(): c for c in df_c.columns}
-    
-    qty_col = next((col_map[c] for c in col_map if any(k in c for k in ['qty', 'qnty', 'weight'])), None)
-    freight_col = next((col_map[c] for c in col_map if 'freight' in c), None)
-    
-    total_qty = df_c[qty_col].apply(parse_num).sum() if qty_col else 0.0
-    total_freight = df_c[freight_col].apply(parse_num).sum() if freight_col else 0.0
-    
-    return {
-        "df": df_c,
-        "total_dispatches": len(df_c),
-        "total_qty": total_qty,
-        "total_freight": total_freight
-    }
+  styles = getSampleStyleSheet()
+  title_style = ParagraphStyle(
+      'DocTitle',
+      parent=styles['Heading1'],
+      fontSize=14,
+      leading=18,
+      alignment=1,
+      textColor=colors.HexColor('#0F172A'),
+  )
+  sub_style = ParagraphStyle(
+      'DocSub',
+      parent=styles['Normal'],
+      fontSize=9,
+      leading=12,
+      alignment=1,
+      textColor=colors.HexColor('#475569'),
+  )
+  sec_style = ParagraphStyle(
+      'SecHeader',
+      parent=styles['Heading2'],
+      fontSize=11,
+      leading=15,
+      textColor=colors.HexColor('#1E293B'),
+  )
+  cell_style = ParagraphStyle('CellText', parent=styles['Normal'], fontSize=8, leading=10)
+  header_cell_style = ParagraphStyle(
+      'HeaderCellText',
+      parent=styles['Normal'],
+      fontSize=8,
+      leading=10,
+      textColor=colors.white,
+      fontName='Helvetica-Bold',
+  )
 
-def parse_purchase(df):
-    """Parses Purchase PO, Plates, and Structure sheets."""
-    df_c = df.dropna(how='all').copy()
-    col_map = {str(c).strip().lower(): c for c in df_c.columns}
-    
-    recd_col = next((col_map[c] for c in col_map if 'recd' in c), None)
-    pending_col = next((col_map[c] for c in col_map if 'pending' in c), None)
-    
-    tot_recd = df_c[recd_col].apply(parse_num).sum() if recd_col else 0.0
-    tot_pending = df_c[pending_col].apply(parse_num).sum() if pending_col else 0.0
-    
-    return {
-        "df": df_c,
-        "total_pos": df_c[col_map.get('po no', df_c.columns[0])].nunique(),
-        "total_recd": tot_recd,
-        "total_pending": tot_pending
-    }
+  # Title Header
+  elements.append(
+      Paragraph(
+          'DAILY GODOWN DISPATCH & STOCK MOVEMENTS REPORT', title_style
+      )
+  )
+  elements.append(
+      Paragraph(
+          'Consolidated report covering dispatches, delayed yesterday vehicle'
+          ' dispatches, and itemized stock balances.',
+          sub_style,
+      )
+  )
+  elements.append(Spacer(1, 10))
+  elements.append(
+      HRFlowable(
+          width='100%',
+          thickness=1,
+          color=colors.HexColor('#CBD5E1'),
+          spaceAfter=12,
+      )
+  )
 
-def parse_accounts(df):
-    """Parses Accounts side-by-side ledgers."""
-    df_c = df.dropna(how='all').copy()
-    # Identifies paired Amount columns
-    amt_cols = [c for c in df_c.columns if 'AMT' in str(c).upper()]
-    total_cashflow = sum([df_c[c].apply(parse_num).sum() for c in amt_cols])
-    return {"df": df_c, "total_cashflow": total_cashflow}
+  # Helper function to generate styled ReportLab Tables
+  def make_table(df, col_widths=None):
+    table_data = [[
+        Paragraph(str(col), header_cell_style) for col in df.columns
+    ]]
+    for _, row in df.iterrows():
+      table_data.append(
+          [Paragraph(str(val), cell_style) for val in row.values]
+      )
 
-# ==========================================
-# 3. VISUALIZATION ENGINE
-# ==========================================
+    t = Table(table_data, colWidths=col_widths)
+    t.setStyle(
+        TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#334155')),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ])
+    )
+    return t
 
-def generate_comparison_chart(today_kpis, yest_kpis, title):
-    fig, ax = plt.subplots(figsize=(8, 3), dpi=150)
-    labels = list(today_kpis.keys())
-    today_vals = [today_kpis[k] for k in labels]
-    yest_vals = [yest_kpis.get(k, 0.0) for k in labels]
-    
-    x = np.arange(len(labels))
-    width = 0.35
-    
-    rects1 = ax.bar(x - width/2, yest_vals, width, label='Yesterday', color='#94A3B8')
-    rects2 = ax.bar(x + width/2, today_vals, width, label='Today', color='#2563EB')
-    
-    ax.set_ylabel('Metrics')
-    ax.set_title(title, fontsize=10, fontweight='bold')
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=15, fontsize=8)
-    ax.legend()
-    ax.grid(axis='y', linestyle='--', alpha=0.5)
-    
+  # 1. Salesperson Summary
+  elements.append(
+      Paragraph('1. Salesperson-Wise Dispatch Summary', sec_style)
+  )
+  elements.append(Spacer(1, 5))
+  elements.append(make_table(sales_df, [90, 80, 70, 180, 120]))
+  elements.append(Spacer(1, 12))
+
+  # 2. Delayed Vehicles
+  elements.append(
+      Paragraph('2. Delayed Yesterday Vehicles Dispatched Today', sec_style)
+  )
+  elements.append(Spacer(1, 5))
+  elements.append(make_table(delayed_df, [80, 40, 80, 160, 90, 90]))
+  elements.append(Spacer(1, 12))
+
+  # 3. Overall Stock Summary
+  elements.append(
+      Paragraph('3. Godown Overall Stock & Production Summary (MT)', sec_style)
+  )
+  elements.append(Spacer(1, 5))
+  elements.append(make_table(summary_df, [120, 105, 105, 105, 105]))
+  elements.append(Spacer(1, 12))
+
+  # 4. Item Stock Breakdown
+  elements.append(
+      Paragraph('4. Item-Wise Stock Breakdown (Opening vs Closing)', sec_style)
+  )
+  elements.append(Spacer(1, 5))
+  elements.append(make_table(stock_df, [200, 115, 115, 110]))
+  elements.append(Spacer(1, 15))
+
+  # 5. Visual Analytics (Charts)
+  elements.append(Paragraph('5. Visual Analytics', sec_style))
+  elements.append(Spacer(1, 8))
+
+  img1 = Image(chart1_bytes, width=540, height=180)
+  img2 = Image(chart2_bytes, width=540, height=200)
+
+  elements.append(img1)
+  elements.append(Spacer(1, 10))
+  elements.append(img2)
+
+  doc.build(elements)
+  buffer.seek(0)
+  return buffer
+
+
+if uploaded_file:
+  try:
+    # Read sheets directly from Excel file
+    xls = pd.ExcelFile(uploaded_file)
+    df_sales = pd.read_excel(xls, 'Salesperson_Summary')
+    df_delayed = pd.read_excel(xls, 'Delayed_Vehicles')
+    df_summary = pd.read_excel(xls, 'Overall_Summary')
+    df_stock = pd.read_excel(xls, 'Stock_Breakdown')
+
+    # Generate Chart 1 (Salesperson Parties)
+    fig1, ax1 = plt.subplots(figsize=(10, 3.5))
+    ax1.bar(
+        df_sales['Sales Person'],
+        df_sales['Parties Count'],
+        color='#6C63FF',
+        width=0.4,
+    )
+    ax1.set_ylabel('Number of Parties Served', fontweight='bold')
+    ax1.set_title(
+        'Salesperson-Wise Served Parties Count', fontweight='bold', pad=12
+    )
+    ax1.grid(axis='y', linestyle='--', alpha=0.5)
     plt.tight_layout()
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight')
-    plt.close(fig)
-    buf.seek(0)
-    return buf
+    chart1_io = io.BytesIO()
+    plt.savefig(chart1_io, format='png', dpi=200)
+    plt.close()
 
-# ==========================================
-# 4. STREAMLIT DASHBOARD & INTERFACE
-# ==========================================
+    # Generate Chart 2 (Opening vs Closing Stock)
+    x = np.arange(len(df_stock['Particulars/Item']))
+    width = 0.35
+    fig2, ax2 = plt.subplots(figsize=(12, 4.5))
+    ax2.bar(
+        x - width / 2,
+        df_stock['Opening Stock (MT)'],
+        width,
+        label='Opening Stock (MT)',
+        color='#3B82F6',
+    )
+    ax2.bar(
+        x + width / 2,
+        df_stock['Closing Stock (MT)'],
+        width,
+        label='Closing Stock (MT)',
+        color='#10B981',
+    )
+    ax2.set_ylabel('Metric Tons (MT)', fontweight='bold')
+    ax2.set_title(
+        'Item-Wise Opening vs Closing Stock Balance', fontweight='bold', pad=12
+    )
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(
+        df_stock['Particulars/Item'], rotation=25, ha='right'
+    )
+    ax2.legend()
+    ax2.grid(axis='y', linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    chart2_io = io.BytesIO()
+    plt.savefig(chart2_io, format='png', dpi=200)
+    plt.close()
 
-st.set_page_config(page_title="Enterprise MIS & Audit Portal", layout="wide")
-st.title("🏭 Enterprise Departmental MIS & Comparison Portal")
+    # Build PDF and create Streamlit Download Button
+    pdf_data = build_pdf_report(
+        df_sales, df_delayed, df_summary, df_stock, chart1_io, chart2_io
+    )
 
-st.sidebar.header("📁 Upload Workbooks")
-today_file = st.sidebar.file_uploader("Upload Today's Excel Report", type=["xlsx"])
-yesterday_file = st.sidebar.file_uploader("Upload Yesterday's Excel (For Comparison)", type=["xlsx"])
+    st.success('PDF generated successfully!')
+    st.download_button(
+        label='📥 Download Godown Report PDF',
+        data=pdf_data,
+        file_name='Daily_Godown_Stock_Report.pdf',
+        mime='application/pdf',
+    )
 
-if today_file:
-    xls_today = pd.ExcelFile(today_file)
-    sheets = xls_today.sheet_names
-    
-    tab1, tab2 = st.tabs(["📊 Daily Dashboard & Analytics", "📄 Day-over-Day Comparison Report"])
-    
-    with tab1:
-        st.subheader("Departmental Data Inspector")
-        selected_sheet = st.selectbox("Select Department Sheet:", sheets)
-        df_sheet = pd.read_excel(xls_today, sheet_name=selected_sheet)
-        
-        st.write(f"**Previewing Raw Data for: {selected_sheet}**")
-        st.dataframe(df_sheet, use_container_width=True)
-        
-    with tab2:
-        st.subheader("Day-over-Day Department Variance")
-        if yesterday_file:
-            xls_yest = pd.ExcelFile(yesterday_file)
-            st.success("Both Today's and Yesterday's reports loaded. Ready for variance audit!")
-            
-            # Example Logistical KPI Comparison
-            log_sheet = next((s for s in sheets if 'logistics' in s.lower() or 'dispatch' in s.lower()), None)
-            if log_sheet and log_sheet in xls_yest.sheet_names:
-                t_log = parse_logistics(pd.read_excel(xls_today, sheet_name=log_sheet))
-                y_log = parse_logistics(pd.read_excel(xls_yest, sheet_name=log_sheet))
-                
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Dispatched Tonnage (MT)", f"{t_log['total_qty']:,.2f}", f"{t_log['total_qty'] - y_log['total_qty']:+,.2f} MT")
-                col2.metric("Total Vehicles Dispatched", t_log['total_dispatches'], f"{t_log['total_dispatches'] - y_log['total_dispatches']:+} Vehicles")
-                col3.metric("Freight Expenditure (₹)", f"₹{t_log['total_freight']:,.2f}", f"₹{t_log['total_freight'] - y_log['total_freight']:+,.2f}")
-                
-                chart_buf = generate_comparison_chart(
-                    {"Qty (MT)": t_log['total_qty'], "Vehicles": t_log['total_dispatches']},
-                    {"Qty (MT)": y_log['total_qty'], "Vehicles": y_log['total_dispatches']},
-                    "Logistics Daily Variance"
-                )
-                st.image(chart_buf)
-        else:
-            st.info("Upload Yesterday's Excel file in the sidebar to activate the Day-over-Day variance comparison.")
+  except Exception as e:
+    st.error(f'Error processing Excel structure: {e}')
