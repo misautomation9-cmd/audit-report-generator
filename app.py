@@ -560,13 +560,13 @@ def generate_pdf_chart_bytes(df_log=None, df_po=None, df_comp=None, df_comp_po=N
             chart_bytes_list.append(buf.getvalue())
             plt.close(fig)
 
-        # Graph 3: Thickness vs Rate
-        if t_col and r_col in df_po.columns:
+        # Graph 3: Thickness vs Qty
+        if t_col and q_col in df_po.columns:
             fig, ax = plt.subplots(figsize=(7, 3.5))
-            grp = df_po.groupby(t_col)[r_col].mean().reset_index()
-            bars = ax.bar(grp[t_col].astype(str), grp[r_col], color='#E67E22')
+            grp = df_po.groupby(t_col)[q_col].sum().reset_index()
+            bars = ax.bar(grp[t_col].astype(str), grp[q_col], color='#E67E22')
             ax.bar_label(bars, fmt='%.1f', padding=2, fontsize=6)
-            ax.set_title("PO: Thickness vs Purchase Rate (₹)", fontsize=9, fontweight='bold')
+            ax.set_title("PO: Thickness vs Total Quantity (MT)", fontsize=9, fontweight='bold')
             plt.xticks(rotation=30, ha='right', fontsize=6)
             plt.tight_layout()
             buf = io.BytesIO()
@@ -722,7 +722,7 @@ if report_mode == "Single Day View":
                         fig_p1 = px.bar(df_po_prep, x=p_col, y="PO_QTY_NUM", text_auto='.2f', title="Party Name vs Total Quantity (MT)")
                         st.plotly_chart(fig_p1, use_container_width=True)
                     if t_col:
-                        fig_p3 = px.bar(df_po_prep, x=t_col, y="PO_RATE_NUM", text_auto='.2f', title="Thickness vs Purchase Rate (₹)")
+                        fig_p3 = px.bar(df_po_prep, x=t_col, y="PO_QTY_NUM", text_auto='.2f', title="Thickness vs Total Quantity (MT)")
                         st.plotly_chart(fig_p3, use_container_width=True)
                 with col2:
                     if d_col:
