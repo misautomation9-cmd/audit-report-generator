@@ -5,152 +5,142 @@ import plotly.graph_objects as go
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Daily Godown Dispatch & Audit Dashboard",
-    page_icon="📊",
+    page_title="Dynamic Godown & Operations Daily Audit",
+    page_icon="📦",
     layout="wide"
 )
 
-# --- TITLE & SUBTITLE ---
-st.title("DAILY GODOWN DISPATCH & STOCK MOVEMENTS REPORT")
-st.caption("Consolidated report covering dispatches, delayed yesterday vehicle dispatches, and itemized stock balances.")
+st.title("DAILY GODOWN DISPATCH, STOCK & OPERATIONAL AUDIT SYSTEM")
+st.caption("Upload your daily multi-sheet Excel file to generate daily reports and run date-wise comparisons.")
 
-# --- SIDEBAR CONTROLS ---
-st.sidebar.header("Filter Options")
-report_type = st.sidebar.radio(
-    "Select View Mode",
-    ["Daily Godown Stock Report", "Dynamic Date-Wise Audit Comparison"]
+# --- SIDEBAR: FILE UPLOADER & MODE ---
+st.sidebar.header("📁 Data Upload & Mode")
+
+mode = st.sidebar.radio(
+    "Select Operating Mode",
+    ["Daily Single Report View", "Date-Wise Audit Comparison"]
 )
 
-if report_type == "Daily Godown Stock Report":
-    # -------------------------------------------------------------------------
-    # 1. SALESPERSON-WISE DISPATCH SUMMARY
-    # -------------------------------------------------------------------------
-    st.header("1. Salesperson-Wise Dispatch Summary")
+EXPECTED_SHEETS = [
+    "HR And Admin",
+    "Logistics And Dispatch",
+    "Purchase Order",
+    "Purchase Plates",
+    "Purchase Structure",
+    "Sales And Marketing",
+    "Accounts",
+    "Sales Person Wise Dispatch",
+    "Stock"
+]
+
+if mode == "Daily Single Report View":
+    uploaded_file = st.sidebar.file_uploader("Upload Today's Daily Excel File", type=["xlsx", "xls"])
     
-    sales_summary_data = [
-        {"Sales Person": "AKASH JI", "Sheet/Date": "GD 19-09-2026", "Total Vehicles": 2, "Parties Served": "STEEL TMT HUB INDIA, NILESH SHAH (RAJDEEP STEEL PRODUCTS/SHIP TO RAIPUR)", "Adjustment/Remarks": "NO ADJUSTMENT"},
-        {"Sales Person": "AKASH JI", "Sheet/Date": "GD 20-09-2026", "Total Vehicles": 5, "Parties Served": "JMD TRADING COMPANY, OM INDUSTRIES TILDA, SG MART, RADIANT METAL ALLOYS, VRIDHI CONSTRUCTION", "Adjustment/Remarks": "No adjustment"},
-        {"Sales Person": "DEEPANKAR JI", "Sheet/Date": "GD 19-09-2026", "Total Vehicles": 4, "Parties Served": "LOHA LIVE PLATFORM, HARI AGRAWAL (RAMETI ENTERPRISES), BANKE TRADECOM SERVICE, VANKAL CABLES", "Adjustment/Remarks": "NO ADJUSTMENT"},
-        {"Sales Person": "DEEPANKAR JI", "Sheet/Date": "GD 20-09-2026", "Total Vehicles": 5, "Parties Served": "OFB TECH LIMITED MAHARASHTRA, DP BANSAL COMMERCIAL COMPANY, ANAND STEEL SAGAR, AGRASEN ISPAT, SHREEJI STEEL SURAT", "Adjustment/Remarks": "yesterday vehicle dispatch 20.08.2026, No adjustment"},
-        {"Sales Person": "DIPESH JI", "Sheet/Date": "GD 19-09-2026", "Total Vehicles": 2, "Parties Served": "ISPAT SALES (A UNIT OF AGS ISPAT), VISHWAGEETA ISPAT", "Adjustment/Remarks": "NO ADJUSTMENT"},
-        {"Sales Person": "DIPESH JI", "Sheet/Date": "GD 20-09-2026", "Total Vehicles": 4, "Parties Served": "ARYA ENERGY LTD ANUPPUR, VISHWAGEETA ISPAT, ASHIRWAD IRON & POWER PVT LTD", "Adjustment/Remarks": "No adjustment"},
-        {"Sales Person": "SONU JI", "Sheet/Date": "GD 19-09-2026", "Total Vehicles": 10, "Parties Served": "ESSEL PROJECTS BHILAI, HI-TECH METALLICS, LAXMIKRIPA STEEL POWER, RR INDUSTRIES, BOLD STEEL SUPPLIER, ARUNSTEEL, AGRAWAL STEEL, JESANI SALES", "Adjustment/Remarks": "NO ADJUSTMENT"},
-        {"Sales Person": "SONU JI", "Sheet/Date": "GD 20-09-2026", "Total Vehicles": 7, "Parties Served": "RELIABLE STEEL MONGERS, DIAMOND FURNITURE, ARUN STEEL, SOURABH ROLLING MILL, ESSEL PROJECTS, KUNAL OZA", "Adjustment/Remarks": "yesterday vehicle dispatch 20.08.2026, No adjustment, Pending for dispatch"},
-        {"Sales Person": "VINITA JI", "Sheet/Date": "GD 19-09-2026", "Total Vehicles": 2, "Parties Served": "SARDA TRADERS, JAHIR AGRO INDUSTRIES", "Adjustment/Remarks": "NO ADJUSTMENT"}
-    ]
-    df_sales = pd.DataFrame(sales_summary_data)
-    st.dataframe(df_sales, use_container_width=True)
+    if uploaded_file is not None:
+        try:
+            excel_data = pd.read_excel(uploaded_file, sheet_name=None)
+            st.sidebar.success(f"File '{uploaded_file.name}' loaded successfully!")
+            
+            # Overview Metrics Header
+            st.header(f"📊 Audit Dashboard — File: {uploaded_file.name}")
+            
+            # Tabbed interface for all 9 sheets
+            tabs = st.tabs(EXPECTED_SHEETS)
+            
+            for index, sheet_name in enumerate(EXPECTED_SHEETS):
+                with tabs[index]:
+                    st.subheader(f"Sheet: {sheet_name}")
+                    if sheet_name in excel_data:
+                        df = excel_data[sheet_name]
+                        
+                        # High-level summary metrics if numeric columns exist
+                        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+                        if numeric_cols:
+                            m_cols = st.columns(min(len(numeric_cols), 4))
+                            for idx, col in enumerate(numeric_cols[:4]):
+                                m_cols[idx % 4].metric(label=f"Total {col}", value=f"{df[col].sum():,.2f}")
+                        
+                        st.dataframe(df, use_container_width=True)
+                        
+                        # Quick Visualization for Specific Sheets
+                        if sheet_name == "Sales Person Wise Dispatch" and "Sales Person" in df.columns:
+                            target_col = "Total Vehicles" if "Total Vehicles" in df.columns else df.columns[1]
+                            fig = px.bar(df, x="Sales Person", y=target_col, text=target_col, title="Vehicles Dispatched per Salesperson")
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                        elif sheet_name == "Stock" and "Particulars/Item" in df.columns:
+                            if "Opening Stock (MT)" in df.columns and "Closing Stock (MT)" in df.columns:
+                                fig = go.Figure(data=[
+                                    go.Bar(name='Opening Stock (MT)', x=df['Particulars/Item'], y=df['Opening Stock (MT)']),
+                                    go.Bar(name='Closing Stock (MT)', x=df['Particulars/Item'], y=df['Closing Stock (MT)'])
+                                ])
+                                fig.update_layout(barmode='group', title="Item-Wise Stock Balance (Opening vs Closing)")
+                                st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.warning(f"Sheet '{sheet_name}' was not found in the uploaded workbook.")
+                        
+        except Exception as e:
+            st.error(f"Error reading Excel file: {e}")
+    else:
+        st.info("Please upload a daily Excel file to populate the report tabs.")
 
-    # -------------------------------------------------------------------------
-    # 2. DELAYED YESTERDAY VEHICLES DISPATCHED TODAY
-    # -------------------------------------------------------------------------
-    st.header("2. Delayed Yesterday Vehicles Dispatched Today")
+elif mode == "Date-Wise Audit Comparison":
+    st.sidebar.subheader("Select Two Files to Compare")
+    file_1 = st.sidebar.file_uploader("Upload Earlier Date Report (File 1)", type=["xlsx", "xls"], key="f1")
+    file_2 = st.sidebar.file_uploader("Upload Later Date Report (File 2)", type=["xlsx", "xls"], key="f2")
     
-    delayed_data = [
-        {"Sheet/Date": "GD 20-09-2026", "SR No": 1, "Vehicle No": "NL01AH3668", "Party Name": "OFB TECH LIMITED MAHARASHTRA", "Sales Person": "DEEPANKAR JI", "Dispatch Remark": "yesterday vehicle dispatch 20.08.2026"},
-        {"Sheet/Date": "GD 20-09-2026", "SR No": 2, "Vehicle No": "CG07CA9013", "Party Name": "DP BANSAL COMMERCIAL COMPANY", "Sales Person": "DEEPANKAR JI", "Dispatch Remark": "yesterday vehicle dispatch 20.08.2026"},
-        {"Sheet/Date": "GD 20-09-2026", "SR No": 3, "Vehicle No": "RJ48GB1023", "Party Name": "RELIABLE STEEL MONGERS PVT LTD", "Sales Person": "SONU JI", "Dispatch Remark": "yesterday vehicle dispatch 20.08.2026"}
-    ]
-    df_delayed = pd.DataFrame(delayed_data)
-    st.dataframe(df_delayed, use_container_width=True)
-
-    # -------------------------------------------------------------------------
-    # 3. GODOWN OVERALL STOCK & PRODUCTION SUMMARY
-    # -------------------------------------------------------------------------
-    st.header("3. Godown Overall Stock & Production Summary (MT)")
-    
-    overall_stock_data = [
-        {"Sheet / Date": "GD 19-09-2026", "Opening Stock (MT)": 3189.14, "Closing Stock (MT)": 4543.22, "Yesterday Production (MT)": 106.21, "Dispatch Stock (MT)": 255.81},
-        {"Sheet / Date": "GD 20-09-2026", "Opening Stock (MT)": 4543.22, "Closing Stock (MT)": 5535.35, "Yesterday Production (MT)": 214.20, "Dispatch Stock (MT)": 328.45}
-    ]
-    df_overall = pd.DataFrame(overall_stock_data)
-    st.dataframe(df_overall, use_container_width=True)
-
-    # -------------------------------------------------------------------------
-    # 4. ITEM-WISE STOCK BREAKDOWN
-    # -------------------------------------------------------------------------
-    st.header("4. Item-Wise Stock Breakdown (Opening vs Closing)")
-    
-    item_stock_data = [
-        {"Particulars/Item": "CHQ COIL", "Opening Stock (MT)": 567.19, "Closing Stock (MT)": 538.63, "Variance (MT)": -28.56},
-        {"Particulars/Item": "CHQ PLATE", "Opening Stock (MT)": 237.97, "Closing Stock (MT)": 222.06, "Variance (MT)": -15.91},
-        {"Particulars/Item": "HR COIL", "Opening Stock (MT)": 3576.35, "Closing Stock (MT)": 5557.50, "Variance (MT)": 1981.15},
-        {"Particulars/Item": "HR PLATE", "Opening Stock (MT)": 589.52, "Closing Stock (MT)": 680.33, "Variance (MT)": 90.81},
-        {"Particulars/Item": "HR SHEET", "Opening Stock (MT)": 577.88, "Closing Stock (MT)": 555.03, "Variance (MT)": -22.85},
-        {"Particulars/Item": "HT COIL", "Opening Stock (MT)": 614.05, "Closing Stock (MT)": 950.60, "Variance (MT)": 336.55},
-        {"Particulars/Item": "HT PLATE", "Opening Stock (MT)": 561.92, "Closing Stock (MT)": 561.93, "Variance (MT)": 0.01},
-        {"Particulars/Item": "OT PLATE", "Opening Stock (MT)": 10.60, "Closing Stock (MT)": 10.60, "Variance (MT)": 0.00},
-        {"Particulars/Item": "PM PLATE", "Opening Stock (MT)": 897.75, "Closing Stock (MT)": 902.02, "Variance (MT)": 4.27},
-        {"Particulars/Item": "SCRAP", "Opening Stock (MT)": 30.48, "Closing Stock (MT)": 31.22, "Variance (MT)": 0.74},
-        {"Particulars/Item": "STRUCTURE", "Opening Stock (MT)": 68.64, "Closing Stock (MT)": 68.64, "Variance (MT)": 0.00}
-    ]
-    df_items = pd.DataFrame(item_stock_data)
-    st.dataframe(df_items, use_container_width=True)
-
-    # -------------------------------------------------------------------------
-    # 5. VISUAL ANALYTICS
-    # -------------------------------------------------------------------------
-    st.header("5. Visual Analytics")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("A. Salesperson-Wise Parties Served")
-        parties_data = {
-            "Sales Person": ["SONU JI", "DEEPANKAR JI", "AKASH JI", "DIPESH JI", "VINITA JI"],
-            "Parties Served": [14, 9, 7, 4, 2]
-        }
-        df_parties = pd.DataFrame(parties_data)
-        fig_parties = px.bar(
-            df_parties, 
-            x="Sales Person", 
-            y="Parties Served", 
-            text="Parties Served",
-            color_discrete_sequence=["#636EFA"]
-        )
-        fig_parties.update_traces(textposition="outside")
-        fig_parties.update_layout(yaxis_range=[0, 16], yaxis_title="Number of Parties Served")
-        st.plotly_chart(fig_parties, use_container_width=True)
-
-    with col2:
-        st.subheader("B. Item Stock Opening vs Closing Comparison")
-        fig_stock = go.Figure(data=[
-            go.Bar(name='Opening Stock (MT)', x=df_items['Particulars/Item'], y=df_items['Opening Stock (MT)'], marker_color='#3366CC'),
-            go.Bar(name='Closing Stock (MT)', x=df_items['Particulars/Item'], y=df_items['Closing Stock (MT)'], marker_color='#109618')
-        ])
-        fig_stock.update_layout(barmode='group', yaxis_title="Metric Tons (MT)")
-        st.plotly_chart(fig_stock, use_container_width=True)
-
-else:
-    # -------------------------------------------------------------------------
-    # DYNAMIC DATE-WISE AUDIT & OPERATIONAL COMPARISON REPORT
-    # -------------------------------------------------------------------------
-    st.header("Operational Audit Comparison: 31-08-2026 vs 01-09-2026")
-    
-    audit_metrics = [
-        {"Operational/ Cost Metric": "Total Invoices Generated", "31-08-2026": "14 Invoices", "01-09-2026": "22 Invoices", "Operational Variance": "+8 Invoices"},
-        {"Operational/ Cost Metric": "Dispatched Quantity Tonnage", "31-08-2026": "217.86 MT", "01-09-2026": "196.41 MT", "Operational Variance": "-21.45 MT"},
-        {"Operational/ Cost Metric": "Calculated Total Freight Cost", "31-08-2026": "0.00", "01-09-2026": "11,299.50", "Operational Variance": "+11,299.50"},
-        {"Operational/ Cost Metric": "Total Loading Duration Hours", "31-08-2026": "88.33 Hrs", "01-09-2026": "76.42 Hrs", "Operational Variance": "-11.92 Hrs"},
-        {"Operational/ Cost Metric": "Average Loading Time / Vehicle", "31-08-2026": "5.89 Hrs", "01-09-2026": "3.06 Hrs", "Operational Variance": "-2.83 Hrs"},
-        {"Operational/ Cost Metric": "Number of Parties Serviced", "31-08-2026": "15", "01-09-2026": "25", "Operational Variance": "+10 Parties"},
-        {"Operational/ Cost Metric": "Yesterday Pending Orders", "31-08-2026": "2", "01-09-2026": "3", "Operational Variance": "+1 Orders"},
-        {"Operational/ Cost Metric": "Material/Billing Pending", "31-08-2026": "0", "01-09-2026": "0", "Operational Variance": "+0 Orders"}
-    ]
-    st.dataframe(pd.DataFrame(audit_metrics), use_container_width=True)
-
-    st.subheader("Operational Audit & Freight Variance Comparison Chart")
-    
-    chart_metrics_df = pd.DataFrame([
-        {"Metric": "Dispatched Qty (MT)", "31-08-2026": 217.9, "01-09-2026": 196.4},
-        {"Metric": "Total Invoices Generated", "31-08-2026": 14.0, "01-09-2026": 22.0},
-        {"Metric": "Loading Hours (Hrs)", "31-08-2026": 88.3, "01-09-2026": 76.4},
-        {"Metric": "Total Freight (₹)", "31-08-2026": 0.0, "01-09-2026": 11299.5},
-        {"Metric": "Parties Serviced", "31-08-2026": 15.0, "01-09-2026": 25.0}
-    ])
-    
-    fig_audit = go.Figure(data=[
-        go.Bar(name='31-08-2026', x=chart_metrics_df['Metric'], y=chart_metrics_df['31-08-2026'], text=chart_metrics_df['31-08-2026'], textposition='auto'),
-        go.Bar(name='01-09-2026', x=chart_metrics_df['Metric'], y=chart_metrics_df['01-09-2026'], text=chart_metrics_df['01-09-2026'], textposition='auto')
-    ])
-    fig_audit.update_layout(barmode='group')
-    st.plotly_chart(fig_audit, use_container_width=True)
+    if file_1 and file_2:
+        try:
+            data_1 = pd.read_excel(file_1, sheet_name=None)
+            data_2 = pd.read_excel(file_2, sheet_name=None)
+            
+            selected_sheet = st.selectbox("Select Sheet to Compare", EXPECTED_SHEETS)
+            
+            if selected_sheet in data_1 and selected_sheet in data_2:
+                df1 = data_1[selected_sheet]
+                df2 = data_2[selected_sheet]
+                
+                col_left, col_right = st.columns(2)
+                with col_left:
+                    st.markdown(f"### 📅 File 1: {file_1.name}")
+                    st.dataframe(df1, use_container_width=True)
+                with col_right:
+                    st.markdown(f"### 📅 File 2: {file_2.name}")
+                    st.dataframe(df2, use_container_width=True)
+                
+                # Comparative Summary if numeric data exists
+                num_cols1 = df1.select_dtypes(include=['number']).columns
+                num_cols2 = df2.select_dtypes(include=['number']).columns
+                common_num_cols = list(set(num_cols1).intersection(set(num_cols2)))
+                
+                if common_num_cols:
+                    st.markdown("---")
+                    st.subheader(f"📈 Operational Variance Summary — {selected_sheet}")
+                    comp_metrics = []
+                    for col in common_num_cols:
+                        val1 = df1[col].sum()
+                        val2 = df2[col].sum()
+                        diff = val2 - val1
+                        comp_metrics.append({
+                            "Metric": col,
+                            f"File 1 ({file_1.name})": round(val1, 2),
+                            f"File 2 ({file_2.name})": round(val2, 2),
+                            "Variance": round(diff, 2)
+                        })
+                    
+                    df_comp = pd.DataFrame(comp_metrics)
+                    st.dataframe(df_comp, use_container_width=True)
+                    
+                    fig = go.Figure(data=[
+                        go.Bar(name=file_1.name, x=df_comp['Metric'], y=df_comp[f"File 1 ({file_1.name})"]),
+                        go.Bar(name=file_2.name, x=df_comp['Metric'], y=df_comp[f"File 2 ({file_2.name})"])
+                    ])
+                    fig.update_layout(barmode='group', title=f"Metric Comparison: {selected_sheet}")
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning(f"The sheet '{selected_sheet}' must exist in both uploaded files to perform comparison.")
+                
+        except Exception as e:
+            st.error(f"Error during file comparison: {e}")
+    else:
+        st.info("Upload both Excel files in the sidebar to run a side-by-side comparative analysis.")
